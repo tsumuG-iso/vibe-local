@@ -10,6 +10,7 @@
 param(
     [string]$Model,
     [string]$Lang,
+    [string]$Engine,
     [switch]$Help
 )
 
@@ -143,6 +144,7 @@ $Messages = @{
         install_done = "installed"
         install_fail = "install failed"
         install_fail_hint = "Please install manually, then re-run this script"
+        skipped = "skipped"
         ollama_starting = "Starting Ollama..."
         ollama_wait = "Waiting for Ollama"
         model_downloading = "Downloading model..."
@@ -513,7 +515,19 @@ if (-not $PythonCmd) {
     exit 1
 }
 
-# --- Ollama ---
+# --- 設定ファイル読み込み ---
+$ConfigFile = "$env:LOCALAPPDATA\vibe-local\config"
+$LLMEngine = "ollama"  # デフォルト
+if (Test-Path $ConfigFile) {
+    try {
+        $configContent = Get-Content $ConfigFile -Raw -ErrorAction Stop
+        if ($configContent -match "LLM_ENGINE=(\w+)") {
+            $LLMEngine = $matches[1]
+        }
+    } catch {}
+}
+
+# --- Ollama (LM Studioの場合はスキップ) ---
 # Check PATH first, then common install locations (GUI installer doesn't always add to PATH)
 $ollamaFound = Get-Command ollama -ErrorAction SilentlyContinue
 if (-not $ollamaFound) {
