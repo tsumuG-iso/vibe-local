@@ -158,6 +158,52 @@ set VIBE_LOCAL_ENGINE=lmstudio && vibe-local.cmd
 vibe-local
 ```
 
+### アンインストール
+
+vibe-localを削除するには以下を実行します:
+
+*macOS / Linux / WSL:*
+```bash
+# インストールディレクトリに移動
+cd ~/vibe-local
+
+# アンインストールスクリプトを実行
+chmod +x uninstall.sh
+./uninstall.sh
+```
+
+*Windows (PowerShell):*
+```powershell
+# インストールディレクトリに移動
+cd vibe-local
+
+# アンインストールスクリプトを実行
+.\uninstall.ps1
+```
+
+*Windows (CMD):*
+```cmd
+cd vibe-local
+powershell -ExecutionPolicy Bypass -File uninstall.ps1
+```
+
+**手動で削除する場合:**
+```bash
+# macOS / Linux / WSL
+rm -rf ~/.config/vibe-local
+rm -rf ~/.local/state/vibe-local
+rm -rf ~/.local/lib/vibe-local
+rm -f ~/.local/bin/vibe-local
+rm -f ~/.local/bin/vibe-coder
+
+# Windows (PowerShell)
+Remove-Item -Path "$env:LOCALAPPDATA\vibe-local" -Recurse -Force
+Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local.cmd" -Force
+Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local.ps1" -Force
+```
+
+> **注:** OllamaやLM Studioは削除されません。これらを削除する場合は別途行ってください。
+
 ### 対応環境
 
 | 環境 | メモリ | メインモデル | サイドカー | 備考 |
