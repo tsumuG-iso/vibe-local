@@ -83,6 +83,12 @@ vibe-local -p "Pythonでじゃんけんゲーム作って"
 
 # モデルを手動指定
 vibe-local --model qwen3:8b
+
+# LLMエンジンを指定
+vibe-local --engine lmstudio
+
+# ヘルプを表示
+vibe-local --help
 ```
 
 ### LM Studioを使う場合
@@ -97,7 +103,9 @@ https://lmstudio.ai/ からダウンロードしてインストール
 
 **3. LLMエンジンをLM Studioに設定**
 
-設定ファイルを使用:
+各環境で以下のコマンドを実行:
+
+*macOS / Linux / WSL (bash/zsh):*
 ```bash
 mkdir -p ~/.config/vibe-local
 cat > ~/.config/vibe-local/config << 'EOF'
@@ -105,9 +113,44 @@ LLM_ENGINE=lmstudio
 EOF
 ```
 
-環境変数を使用:
+*Windows (PowerShell):*
+```powershell
+$env:USERPROFILE = [System.Environment]::GetFolderPath("UserProfile")
+$configDir = "$env:USERPROFILE\.config\vibe-local"
+if (-not (Test-Path $configDir)) {
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+}
+Set-Content -Path "$configDir\config" -Value "LLM_ENGINE=lmstudio"
+```
+
+*Windows (CMD):*
+```cmd
+mkdir "%USERPROFILE%\.config\vibe-local" 2>nul
+echo LLM_ENGINE=lmstudio > "%USERPROFILE%\.config\vibe-local\config"
+```
+
+**コマンドラインオプションを使用:**
 ```bash
+# macOS / Linux / WSL
+vibe-local --engine lmstudio
+
+# Windows (PowerShell)
+.\vibe-local.ps1 --engine lmstudio
+
+# Windows (CMD)
+vibe-local.cmd --engine lmstudio
+```
+
+**環境変数を使用:**
+```bash
+# macOS / Linux / WSL
 VIBE_LOCAL_ENGINE=lmstudio vibe-local
+
+# Windows (PowerShell)
+$env:VIBE_LOCAL_ENGINE="lmstudio"; .\vibe-local.ps1
+
+# Windows (CMD)
+set VIBE_LOCAL_ENGINE=lmstudio && vibe-local.cmd
 ```
 
 **4. 起動**

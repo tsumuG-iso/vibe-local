@@ -185,6 +185,19 @@ while [[ $# -gt 0 ]]; do
             MODEL="$2"
             shift 2
             ;;
+        --engine)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --engine requires an argument (ollama or lmstudio)"
+                exit 1
+            fi
+            ENGINE="$2"
+            if [[ "$ENGINE" != "ollama" && "$ENGINE" != "lmstudio" ]]; then
+                echo "Error: --engine must be 'ollama' or 'lmstudio'"
+                exit 1
+            fi
+            LLM_ENGINE="$ENGINE"
+            shift 2
+            ;;
         -y|--yes|--dangerously-skip-permissions)
             YES_FLAG=1
             shift
@@ -192,6 +205,37 @@ while [[ $# -gt 0 ]]; do
         --debug)
             VIBE_LOCAL_DEBUG=1
             shift
+            ;;
+        -h|--help)
+            cat <<'HELP'
+vibe-local - Free AI Coding Agent for Local LLMs
+
+使い方:
+  vibe-local                    # インタラクティブモード
+  vibe-local -p "質問"          # ワンショット
+  vibe-local --auto             # ネットワーク状況で自動判定
+  vibe-local --model <name>     # モデル手動指定
+  vibe-local --engine <name>    # LLMエンジン指定 (ollama/lmstudio)
+  vibe-local -y                 # パーミッション確認スキップ (自己責任)
+  vibe-local --debug            # デバッグモード
+
+LLMエンジン:
+  ollama      - Ollamaを使用 (デフォルト)
+  lmstudio    - LM Studioを使用
+
+設定ファイル:
+  ~/.config/vibe-local/config
+  設定例:
+    LLM_ENGINE=lmstudio
+    MODEL=qwen3:8b
+
+環境変数:
+  VIBE_LOCAL_ENGINE=lmstudio     # LLMエンジンを指定
+  VIBE_LOCAL_DEBUG=1             # デバッグモードを有効化
+
+詳細: https://github.com/tsumuG-iso/vibe-local/tree/lm-studio-support
+HELP
+            exit 0
             ;;
         *)
             EXTRA_ARGS+=("$1")

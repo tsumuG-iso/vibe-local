@@ -61,6 +61,17 @@ NC='\033[0m'
 GRADIENT_NEON=(46 47 48 49 50 51 45 39 33 27 21 57 93 129 165 201 200 199 198 197 196)
 GRADIENT_VAPOR=(51 87 123 159 195 189 183 177 171 165)
 
+# --- 設定ファイル読み込み ---
+CONFIG_FILE="${HOME}/.config/vibe-local/config"
+LLM_ENGINE="ollama"  # デフォルト
+if [ -f "$CONFIG_FILE" ]; then
+    _val() { grep -E "^${1}=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' | sed "s/^[\"']//;s/[\"'[:space:]]*$//;s/[[:space:]]*#.*//" || true; }
+    _e="$(_val LLM_ENGINE)"
+    [ -n "$_e" ] && LLM_ENGINE="$_e"
+    unset -f _val
+    unset _e
+fi
+
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  🌐  Ｔ Ｒ Ｉ Ｌ Ｉ Ｎ Ｇ Ｕ Ａ Ｌ   Ｅ Ｎ Ｇ Ｉ Ｎ Ｅ  ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -119,6 +130,7 @@ MSG_ja_mem_lack_hint2="8GB以上のメモリを搭載したMacが必要です"
 MSG_ja_manual_model="手動指定モデル"
 MSG_ja_installed="インストール済み"
 MSG_ja_installing="インストール中..."
+MSG_ja_skipped="スキップ"
 MSG_ja_install_done="インストール完了"
 MSG_ja_install_fail="インストール失敗"
 MSG_ja_install_fail_hint="手動でインストールしてから再実行してください"
@@ -197,6 +209,7 @@ MSG_en_mem_lack_hint2="A Mac with 8GB+ RAM is required"
 MSG_en_manual_model="Manual model"
 MSG_en_installed="installed"
 MSG_en_installing="Installing..."
+MSG_en_skipped="skipped"
 MSG_en_install_done="installed"
 MSG_en_install_fail="install failed"
 MSG_en_install_fail_hint="Please install manually, then re-run this script"
@@ -275,6 +288,7 @@ MSG_zh_mem_lack_hint2="需要8GB以上内存的Mac"
 MSG_zh_manual_model="手动指定模型"
 MSG_zh_installed="已安装"
 MSG_zh_installing="安装中..."
+MSG_zh_skipped="跳过"
 MSG_zh_install_done="安装完成"
 MSG_zh_install_fail="安装失败"
 MSG_zh_install_fail_hint="请手动安装后重新运行此脚本"
@@ -738,30 +752,34 @@ if [ "$IS_MAC" -eq 1 ]; then
     fi
 fi
 
-# --- Ollama ---
-if command -v ollama &>/dev/null; then
-    vapor_success "Ollama 🦙 $(msg installed) ($(ollama --version 2>/dev/null || echo '?'))"
+# --- Ollama (LM Studioの場合はスキップ) ---
+if [ "$LLM_ENGINE" = "lmstudio" ]; then
+    vapor_info "Ollama 🦙 $(msg skipped) (LM Studioモード)"
 else
-    if [ "$IS_MAC" -eq 1 ] && command -v brew &>/dev/null; then
-        if run_with_spinner "Ollama 🦙 $(msg installing)" brew install ollama; then
-            vapor_success "Ollama 🦙 $(msg install_done)"
-        else
-            vapor_error "Ollama 🦙 $(msg install_fail)"
-            vapor_warn "$(msg install_fail_hint): brew install ollama"
-        fi
-    elif [ "$IS_LINUX" -eq 1 ]; then
-        # NOTE: Do NOT use run_with_spinner here — Ollama installer calls
-        # sudo internally and needs interactive TTY for password prompt.
-        vapor_info "Ollama 🦙 $(msg installing)"
-        echo ""
-        if bash -c "curl -fsSL https://ollama.com/install.sh | sh"; then
-            vapor_success "Ollama 🦙 $(msg install_done)"
-        else
-            vapor_error "Ollama 🦙 $(msg install_fail)"
-            vapor_warn "$(msg install_fail_hint): curl -fsSL https://ollama.com/install.sh | sh"
-        fi
+    if command -v ollama &>/dev/null; then
+        vapor_success "Ollama 🦙 $(msg installed) ($(ollama --version 2>/dev/null || echo '?'))"
     else
-        vapor_error "Ollama 🦙 $(msg install_fail)"
+        if [ "$IS_MAC" -eq 1 ] && command -v brew &>/dev/null; then
+            if run_with_spinner "Ollama 🦙 $(msg installing)" brew install ollama; then
+                vapor_success "Ollama 🦙 $(msg install_done)"
+            else
+                vapor_error "Ollama 🦙 $(msg install_fail)"
+                vapor_warn "$(msg install_fail_hint): brew install ollama"
+            fi
+        elif [ "$IS_LINUX" -eq 1 ]; then
+            # NOTE: Do NOT use run_with_spinner here — Ollama installer calls
+            # sudo internally and needs interactive TTY for password prompt.
+            vapor_info "Ollama 🦙 $(msg installing)"
+            echo ""
+            if bash -c "curl -fsSL https://ollama.com/install.sh | sh"; then
+                vapor_success "Ollama 🦙 $(msg install_done)"
+            else
+                vapor_error "Ollama 🦙 $(msg install_fail)"
+                vapor_warn "$(msg install_fail_hint): curl -fsSL https://ollama.com/install.sh | sh"
+            fi
+        else
+            vapor_error "Ollama 🦙 $(msg install_fail)"
+        fi
     fi
 fi
 
@@ -811,12 +829,15 @@ else
 fi
 
 # =============================================
-# Step 4: モデルダウンロード
+# Step 4: モデルダウンロード (LM Studioの場合はスキップ)
 # =============================================
-step_header 4 "$(msg step4)"
+if [ "$LLM_ENGINE" = "lmstudio" ]; then
+    vapor_info "モデルダウンロード $(msg skipped) (LM Studioモード)"
+else
+    step_header 4 "$(msg step4)"
 
-# Ollama 起動確認 (スピナー付きで待つ)
-if ! curl -s --max-time 2 "http://localhost:11434/api/tags" &>/dev/null; then
+    # Ollama 起動確認 (スピナー付きで待つ)
+    if ! curl -s --max-time 2 "http://localhost:11434/api/tags" &>/dev/null; then
     vapor_info "$(msg ollama_starting)"
     if [ "$IS_MAC" -eq 1 ]; then
         open -a Ollama 2>/dev/null || (ollama serve &>/dev/null &)
@@ -922,6 +943,7 @@ if [ -n "$SIDECAR_MODEL" ] && [ "$SIDECAR_MODEL" != "$MODEL" ]; then
         vapor_warn "Sidecar model download failed (non-critical): $SIDECAR_MODEL"
     fi
 fi
+fi  # End LM Studio check for Step 4
 
 # =============================================
 # Step 5: ファイル配置
@@ -1001,8 +1023,9 @@ else
     cat > "$CONFIG_FILE" << EOF
 # vibe-local config
 # Auto-generated: $(date '+%Y-%m-%d %H:%M:%S')
-# Engine: vibe-coder (direct Ollama, no proxy needed)
+# Engine: vibe-coder (direct Ollama/LM Studio, no proxy needed)
 
+LLM_ENGINE="$LLM_ENGINE"
 MODEL="$MODEL"
 SIDECAR_MODEL="${SIDECAR_MODEL}"
 OLLAMA_HOST="http://localhost:11434"
