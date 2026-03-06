@@ -702,6 +702,7 @@ class Config:
 
     def __init__(self):
         self.ollama_host = self.DEFAULT_OLLAMA_HOST
+        self.llm_engine = "ollama"  # ollama or lmstudio
         self.model = self.DEFAULT_MODEL
         self.sidecar_model = self.DEFAULT_SIDECAR
         self.max_tokens = self.DEFAULT_MAX_TOKENS
@@ -808,6 +809,8 @@ class Config:
         if os.environ.get("OLLAMA_HOST"):
             self.ollama_host = os.environ["OLLAMA_HOST"]
         # VIBE_CODER_* are legacy env vars; VIBE_LOCAL_* take precedence (loaded second)
+        if os.environ.get("VIBE_LOCAL_ENGINE"):
+            self.llm_engine = os.environ["VIBE_LOCAL_ENGINE"]
         if os.environ.get("VIBE_CODER_MODEL"):
             self.model = os.environ["VIBE_CODER_MODEL"]
         if os.environ.get("VIBE_LOCAL_MODEL"):
@@ -1402,9 +1405,10 @@ IMPORTANT — This is Windows (NOT Linux/macOS):
 # ════════════════════════════════════════════════════════════════════════════════
 
 class OllamaClient:
-    """Communicates with Ollama via /v1/chat/completions."""
+    """Communicates with Ollama or LM Studio via OpenAI-compatible API."""
 
     def __init__(self, config):
+        self.llm_engine = getattr(config, 'llm_engine', 'ollama')
         self.base_url = config.ollama_host
         self.max_tokens = config.max_tokens
         self.temperature = config.temperature
@@ -1414,28 +1418,58 @@ class OllamaClient:
         self._supports_tool_streaming = None  # None=untested, True/False=detected
 
     def check_connection(self, retries=3):
-        """Check if Ollama is reachable. Returns (ok, model_list)."""
-        url = f"{self.base_url}/api/tags"
-        for attempt in range(retries):
-            try:
-                resp = urllib.request.urlopen(url, timeout=5)
+        """Check if LLM engine is reachable. Returns (ok, model_list)."""
+        # LM Studio uses OpenAI-compatible /v1/models endpoint
+        if self.llm_engine == "lmstudio":
+            url = f"{self.base_url}/v1/models"
+            for attempt in range(retries):
                 try:
-                    data = json.loads(resp.read(10 * 1024 * 1024))  # 10MB cap
-                finally:
-                    resp.close()
-                models = [m["name"] for m in data.get("models", [])]
-                return True, models
-            except Exception as e:
-                if attempt < retries - 1:
-                    time.sleep(1)
-                    continue
-                return False, []
+                    resp = urllib.request.urlopen(url, timeout=5)
+                    try:
+                        data = json.loads(resp.read(10 * 1024 * 1024))  # 10MB cap
+                    finally:
+                        resp.close()
+                    # LM Studio returns {"object":"list","data":[{"id":"model-name",...}]}
+                    models = [m.get("id", "") for m in data.get("data", [])]
+                    return True, models
+                except Exception as e:
+                    if attempt < retries - 1:
+                        time.sleep(1)
+                        continue
+                    return False, []
+        else:
+            # Ollama uses /api/tags endpoint
+            url = f"{self.base_url}/api/tags"
+            for attempt in range(retries):
+                try:
+                    resp = urllib.request.urlopen(url, timeout=5)
+                    try:
+                        data = json.loads(resp.read(10 * 1024 * 1024))  # 10MB cap
+                    finally:
+                        resp.close()
+                    models = [m["name"] for m in data.get("models", [])]
+                    return True, models
+                except Exception as e:
+                    if attempt < retries - 1:
+                        time.sleep(1)
+                        continue
+                    return False, []
 
     def detect_tool_streaming(self):
-        """Auto-detect if Ollama supports streaming with tool calls (0.5+).
-        Calls /api/version and checks semver >= 0.5.0."""
+        """Auto-detect if LLM engine supports streaming with tool calls.
+        Ollama 0.5+: Calls /api/version and checks semver >= 0.5.0.
+        LM Studio: Always True (OpenAI-compatible)."""
         if self._supports_tool_streaming is not None:
             return self._supports_tool_streaming
+
+        # LM Studio always supports tool streaming (OpenAI-compatible)
+        if self.llm_engine == "lmstudio":
+            self._supports_tool_streaming = True
+            if self.debug:
+                print(f"{C.DIM}[debug] LM Studio: tool_streaming=yes{C.RESET}", file=sys.stderr)
+            return True
+
+        # Ollama: check version
         try:
             url = f"{self.base_url}/api/version"
             resp = urllib.request.urlopen(url, timeout=5)
@@ -1611,12 +1645,16 @@ class OllamaClient:
         }
 
     def chat(self, model, messages, tools=None, stream=True):
-        """Send chat request via Ollama native /api/chat.
+        """Send chat request via LLM engine API.
 
-        Uses the native API (not /v1/chat/completions) so that options like
-        num_ctx are properly respected.  Returns OpenAI-compatible format via
-        an adapter layer so all downstream consumers work unchanged.
+        LM Studio: Uses OpenAI-compatible /v1/chat/completions endpoint.
+        Ollama: Uses native /api/chat endpoint for better options support.
+        Returns OpenAI-compatible format.
         """
+        if self.llm_engine == "lmstudio":
+            return self._chat_openai(model, messages, tools, stream)
+
+        # Ollama native API
         temp = self.temperature
         if tools:
             # Lower temperature for tool-calling (improves JSON reliability)
@@ -1699,6 +1737,121 @@ class OllamaClient:
                 print(f"{C.DIM}[debug] Response: prompt={usage.get('prompt_tokens',0)} "
                       f"completion={usage.get('completion_tokens',0)}{C.RESET}", file=sys.stderr)
             return openai_resp
+
+    def _chat_openai(self, model, messages, tools=None, stream=True):
+        """Send chat request via OpenAI-compatible /v1/chat/completions endpoint.
+        Used by LM Studio and other OpenAI-compatible servers."""
+        temp = self.temperature
+        if tools:
+            # Lower temperature for tool-calling (improves JSON reliability)
+            temp = min(self.temperature, 0.3)
+
+        # LM Studio/OpenAI format uses OpenAI message format directly
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": stream,
+            "temperature": temp,
+            "max_tokens": self.max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/v1/chat/completions",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        if self.debug:
+            print(f"{C.DIM}[debug] POST {self.base_url}/v1/chat/completions "
+                  f"model={model} msgs={len(messages)} tools={len(tools or [])} "
+                  f"stream={stream}{C.RESET}", file=sys.stderr)
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            error_body = ""
+            try:
+                error_body = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                pass
+            finally:
+                e.close()
+            if e.code == 404:
+                raise RuntimeError(f"Model '{model}' not found.") from e
+            elif e.code == 400:
+                if "tool" in error_body.lower() or "function" in error_body.lower():
+                    raise RuntimeError(
+                        f"Model '{model}' does not support tool/function calling. "
+                        f"Error: {error_body[:200]}"
+                    ) from e
+                else:
+                    raise RuntimeError(f"Bad request: {error_body}") from e
+            else:
+                raise RuntimeError(f"HTTP error {e.code}: {error_body}") from e
+
+        if stream:
+            return self._iter_sse(resp)
+        else:
+            try:
+                raw = resp.read(10 * 1024 * 1024)  # 10MB safety cap
+            finally:
+                resp.close()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Invalid JSON: {raw[:200]}") from e
+            # OpenAI format is already OpenAI-compatible, just return it
+            if self.debug:
+                usage = data.get("usage", {})
+                print(f"{C.DIM}[debug] Response: prompt={usage.get('prompt_tokens',0)} "
+                      f"completion={usage.get('completion_tokens',0)}{C.RESET}", file=sys.stderr)
+            return data
+
+    def _iter_sse(self, resp):
+        """Iterate over SSE (Server-Sent Events) stream from OpenAI-compatible API.
+        Each line starts with "data: " followed by JSON. Yields chunks in OpenAI delta format.
+        """
+        try:
+            while True:
+                try:
+                    line_bytes = resp.readline()
+                except (ConnectionError, OSError, urllib.error.URLError) as e:
+                    if self.debug:
+                        print(f"\n{C.YELLOW}[debug] SSE stream read error: {e}{C.RESET}", file=sys.stderr)
+                    break
+                except Exception:
+                    break
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data: "):
+                    continue
+                json_str = line[6:]  # Remove "data: " prefix
+                if json_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    continue
+
+                choices = data.get("choices", [])
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {})
+                finish_reason = choices[0].get("finish_reason", None)
+
+                # Build chunk in OpenAI format
+                chunk = {"delta": delta}
+                if finish_reason:
+                    chunk["finish_reason"] = finish_reason
+
+                yield chunk
+        finally:
+            resp.close()
 
     def _iter_ndjson(self, resp):
         """Iterate over NDJSON stream from Ollama native /api/chat.
