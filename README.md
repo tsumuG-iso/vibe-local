@@ -1,4 +1,10 @@
-# vibe-local
+# vibe-local (LM Studio Support)
+
+> **⚠️ これは [ochyai/vibe-local](https://github.com/ochyai/vibe-local) のLM Studio対応版です**
+>
+> 本家の `lm-studio-support` ブランチをベースに、LM StudioのOpenAI互換APIに対応させたフォークです。
+
+---
 
 ```
     ██╗   ██╗██╗██████╗ ███████╗
@@ -37,7 +43,7 @@ MacやWindows、LinuxにコマンドをコピペするだけでAIがコードを
 **エージェントのコア `vibe-coder.py` は Python 標準ライブラリだけで書かれた単一ファイルです。** pip install 不要、外部パッケージ依存ゼロ。ソースコードはそのまま読めるため、AIコーディングエージェントの仕組みを学ぶ教材としても、研究のベースラインとしても使えます。すべてがオープンソース (MIT) で公開されています。
 
 ```
-vibe-local → vibe-coder.py (OSS, Python stdlib only, ~7400行) → Ollama (直接通信)
+vibe-local → vibe-coder.py (OSS, Python stdlib only, ~7400行) → Ollama / LM Studio (直接通信)
 ```
 
 ログイン不要・Node.js不要・プロキシプロセス不要。16個の内蔵ツール、サブエージェント、並列エージェント、ファイル監視、画像・PDF読み取り対応。MCP連携・スキルシステム・Plan/Actモード・Gitチェックポイント・自動テスト・固定フッター(DECSTBM)搭載。787テスト。
@@ -50,12 +56,12 @@ vibe-local → vibe-coder.py (OSS, Python stdlib only, ~7400行) → Ollama (直
 
 *Mac / Linux / Windows(WSL) の場合:*
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 ```
 
 *Windows (PowerShell) の場合:*
 ```powershell
-Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/ochyai/vibe-local/main/install.ps1)
+Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.ps1)
 ```
 
 **3.** 新しいターミナルを開いて起動:
@@ -63,6 +69,8 @@ Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/ochy
 ```bash
 vibe-local
 ```
+
+> **注意:** 本家のインストールURLは使用しないでください。上記のURLを使用してください。
 
 ### 使い方
 
@@ -75,6 +83,36 @@ vibe-local -p "Pythonでじゃんけんゲーム作って"
 
 # モデルを手動指定
 vibe-local --model qwen3:8b
+```
+
+### LM Studioを使う場合
+
+**1. LM Studioをインストール**
+https://lmstudio.ai/ からダウンロードしてインストール
+
+**2. LM Studioを起動してAPI Serverを有効化**
+- LM Studioアプリを起動
+- 左サイドバーの Settings → API Server を有効化
+- Portが `1234` であることを確認（デフォルト）
+
+**3. LLMエンジンをLM Studioに設定**
+
+設定ファイルを使用:
+```bash
+mkdir -p ~/.config/vibe-local
+cat > ~/.config/vibe-local/config << 'EOF'
+LLM_ENGINE=lmstudio
+EOF
+```
+
+環境変数を使用:
+```bash
+VIBE_LOCAL_ENGINE=lmstudio vibe-local
+```
+
+**4. 起動**
+```bash
+vibe-local
 ```
 
 ### 対応環境
@@ -103,15 +141,24 @@ open -a Ollama        # macOS
 ollama serve          # Linux / Windows
 ```
 
-**"モデルが見つかりません"**
+**"LM Studio API Serverが起動していません"**
+- LM Studioアプリを起動
+- Settings → API Server を有効化
+- Portが `1234` であることを確認
+
+**"モデルが見つかりません"** (Ollamaの場合)
 ```bash
 ollama pull qwen3:8b
 ```
 
+**"モデルが見つかりません"** (LM Studioの場合)
+- LM Studioでモデルがロードされているか確認
+- モデル名が正しいか確認
+
 **"vibe-coder.py が見つかりません"**
 ```bash
 # 再インストール
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 ```
 
 **モデルを変更したい**
@@ -165,12 +212,12 @@ Mac（まっく）や Windows（ういんどうず）で、AI（えーあい）�
 
 *Mac / Linux / Windows(WSL) のとき:*
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 ```
 
 *Windows (PowerShell) のとき:*
 ```powershell
-Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/ochyai/vibe-local/main/install.ps1)
+Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.ps1)
 ```
 
 **3.** あたらしい ターミナルを ひらいて、これを うつ：
@@ -259,12 +306,12 @@ No login. No Node.js. No proxy process. 16 built-in tools, sub-agents, parallel 
 
 *For Mac / Linux / Windows(WSL):*
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 ```
 
 *For Windows (PowerShell natively):*
 ```powershell
-Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/ochyai/vibe-local/main/install.ps1)
+Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.ps1)
 ```
 
 **3.** Open a new terminal and run:
@@ -320,7 +367,7 @@ ollama pull qwen3:8b
 **"vibe-coder.py not found"**
 ```bash
 # Reinstall
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 ```
 
 **Change model**
@@ -380,12 +427,12 @@ vibe-local → vibe-coder.py (开源, 纯Python标准库, ~7400行) → Ollama (
 
 *Mac / Linux / Windows(WSL) 环境:*
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 ```
 
 *Windows (PowerShell) 环境:*
 ```powershell
-Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/ochyai/vibe-local/main/install.ps1)
+Invoke-Expression (Invoke-RestMethod -Uri https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.ps1)
 ```
 
 **3.** 打开新终端并运行：
@@ -441,7 +488,7 @@ ollama pull qwen3:8b
 **"vibe-coder.py 未找到"**
 ```bash
 # 重新安装
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 ```
 
 **更换模型**
@@ -917,7 +964,7 @@ vibe-local offers normal mode (confirms each action) and auto-approve mode (`-y`
 
 ```bash
 # 1. Pre-install on venue computers (while online)
-curl -fsSL https://raw.githubusercontent.com/ochyai/vibe-local/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 
 # 2. Pre-download models (for offline use)
 ollama pull qwen3:8b          # For 16GB machines
