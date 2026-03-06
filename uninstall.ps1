@@ -15,11 +15,15 @@ $YELLOW = "`e[38;5;226m"
 $CYAN = "`e[38;5;51m"
 $NC = "`e[0m"
 
-# Directories to remove
+# Directories to remove (installed by install.ps1)
 $ConfigDir = "$env:LOCALAPPDATA\vibe-local"
 $StateDir = "$env:LOCALAPPDATA\vibe-local"
 $LibDir = "$env:LOCALAPPDATA\vibe-local"
 $BinDir = "$env:USERPROFILE\.local\bin"
+
+# Current directory (for clone directory removal)
+$CurrentDir = Get-Location
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host ""
 Write-Host "============================================"
@@ -32,6 +36,13 @@ Write-Host "  - $StateDir"
 Write-Host "  - $LibDir"
 Write-Host "  - $BinDir\vibe-local.cmd"
 Write-Host "  - $BinDir\vibe-local.ps1"
+
+# Check if current directory is a vibe-local clone
+if ($null -ne $ScriptDir -and (Test-Path "$ScriptDir\.git")) {
+    if ($CurrentDir.Path -eq $ScriptDir -or $CurrentDir.Path.StartsWith($ScriptDir.Path + [IO.Path]::DirectorySeparatorChar)) {
+        Write-Host "  - $ScriptDir (クローンディレクトリ)"
+    }
+}
 Write-Host ""
 
 $Confirm = Read-Host "本当に削除しますか？ [y/N]"
@@ -67,6 +78,18 @@ foreach ($BinFile in @("$BinDir\vibe-local.cmd", "$BinDir\vibe-local.ps1")) {
     if (Test-Path $BinFile) {
         Remove-Item -Path $BinFile -Force
         Write-Host "  ✓ $BinFile"
+    }
+}
+
+# Remove clone directory if script is run from within it
+if ($null -ne $ScriptDir -and (Test-Path "$ScriptDir\.git")) {
+    if ($CurrentDir.Path -eq $ScriptDir -or $CurrentDir.Path.StartsWith($ScriptDir.Path + [IO.Path]::DirectorySeparatorChar)) {
+        Write-Host "${CYAN}クローンディレクトリを検出しました${NC}"
+        # Move up one directory first
+        $ParentDir = Split-Path -Parent $ScriptDir
+        Set-Location $ParentDir -ErrorAction SilentlyContinue
+        Remove-Item -Path $ScriptDir -Recurse -Force
+        Write-Host "  ✓ $ScriptDir"
     }
 }
 

@@ -162,28 +162,39 @@ vibe-local
 
 vibe-localを削除するには以下を実行します:
 
+> **どれの場所からでも実行できます:**
+> - インストールされたバイナリがある場所（`~/.local/bin/` や `%USERPROFILE%\.local\bin\`）
+> - クローンディレクトリ（`~/vibe-local` や `vibe-local/`）
+> - どちらから実行しても、すべてのファイルが削除されます
+
 *macOS / Linux / WSL:*
 ```bash
-# インストールディレクトリに移動
+# クローンディレクトリから実行（推奨）
 cd ~/vibe-local
-
-# アンインストールスクリプトを実行
 chmod +x uninstall.sh
+./uninstall.sh
+
+# または、どこからでも実行可能
 ./uninstall.sh
 ```
 
 *Windows (PowerShell):*
 ```powershell
-# インストールディレクトリに移動
+# クローンディレクトリから実行（推奨）
 cd vibe-local
+.\uninstall.ps1
 
-# アンインストールスクリプトを実行
+# または、どこからでも実行可能
 .\uninstall.ps1
 ```
 
 *Windows (CMD):*
 ```cmd
+# クローンディレクトリから実行（推奨）
 cd vibe-local
+powershell -ExecutionPolicy Bypass -File uninstall.ps1
+
+# または、どこからでも実行可能
 powershell -ExecutionPolicy Bypass -File uninstall.ps1
 ```
 
@@ -203,6 +214,7 @@ Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local.ps1" -Force
 ```
 
 > **注:** OllamaやLM Studioは削除されません。これらを削除する場合は別途行ってください。
+> **クローンディレクトリから実行した場合:** スクリプトは自動的に親ディレクトリに移動して、クローンディレクトリも削除します。
 
 ### 対応環境
 
