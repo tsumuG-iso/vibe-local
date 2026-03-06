@@ -58,6 +58,8 @@ $VibeCoderScript = Join-Path $LibDir "vibe-coder.py"
 $CfgModel = ""
 $SidecarModel = ""
 $OllamaHost = "http://localhost:11434"
+$LLMEngine = "ollama"
+$LMStudioHost = "http://localhost:1234"
 $VibeLocalDebug = 0
 
 # Parse config file (safe grep-style, no dot-sourcing)
@@ -67,7 +69,9 @@ if (Test-Path $ConfigFile) {
         if ($line -match '^\s*#') { continue }
         if ($line -match '^\s*MODEL\s*=\s*"?([^"]*)"?\s*$') { $CfgModel = $Matches[1].Trim() }
         if ($line -match '^\s*SIDECAR_MODEL\s*=\s*"?([^"]*)"?\s*$') { $SidecarModel = $Matches[1].Trim() }
+        if ($line -match '^\s*LLM_ENGINE\s*=\s*"?([^"]*)"?\s*$') { $LLMEngine = $Matches[1].Trim() }
         if ($line -match '^\s*OLLAMA_HOST\s*=\s*"?([^"]*)"?\s*$') { $OllamaHost = $Matches[1].Trim() }
+        if ($line -match '^\s*LMSTUDIO_HOST\s*=\s*"?([^"]*)"?\s*$') { $LMStudioHost = $Matches[1].Trim() }
         if ($line -match '^\s*VIBE_LOCAL_DEBUG\s*=\s*"?([01])"?\s*$') { $VibeLocalDebug = [int]$Matches[1] }
     }
 }
@@ -76,11 +80,19 @@ if (Test-Path $ConfigFile) {
 if ($Model) { $CfgModel = $Model }
 if ($DebugMode) { $VibeLocalDebug = 1 }
 
-# [SEC] Validate OLLAMA_HOST - only allow localhost (SSRF prevention)
-$ollamaUri = [System.Uri]::new($OllamaHost)
-if ($ollamaUri.Host -notin @("localhost", "127.0.0.1", "::1", "[::1]")) {
-    Write-Host "Warning: OLLAMA_HOST '$($ollamaUri.Host)' is not localhost. Resetting to localhost for security." -ForegroundColor Yellow
-    $OllamaHost = "http://localhost:11434"
+# [SEC] Validate LLM engine host - only allow localhost (SSRF prevention)
+if ($LLMEngine -eq "lmstudio") {
+    $ollamaUri = [System.Uri]::new($LMStudioHost)
+    if ($ollamaUri.Host -notin @("localhost", "127.0.0.1", "::1", "[::1]")) {
+        Write-Host "Warning: LMSTUDIO_HOST '$($ollamaUri.Host)' is not localhost. Resetting to localhost for security." -ForegroundColor Yellow
+        $LMStudioHost = "http://localhost:1234"
+    }
+} else {
+    $ollamaUri = [System.Uri]::new($OllamaHost)
+    if ($ollamaUri.Host -notin @("localhost", "127.0.0.1", "::1", "[::1]")) {
+        Write-Host "Warning: OLLAMA_HOST '$($ollamaUri.Host)' is not localhost. Resetting to localhost for security." -ForegroundColor Yellow
+        $OllamaHost = "http://localhost:11434"
+    }
 }
 
 # --- Find vibe-coder.py ---
@@ -285,12 +297,16 @@ try {
     } else {
         Write-Host " Model: (auto-detect)"
     }
-    Write-Host " Ollama: $OllamaHost"
-    Write-Host " Engine: vibe-coder.py (direct, no proxy)"
+    if ($LLMEngine -eq "lmstudio") {
+        Write-Host " Engine: LM Studio ($LMStudioHost)"
+        $env:OLLAMA_HOST = "$LMStudioHost/v1"
+    } else {
+        Write-Host " Ollama: $OllamaHost"
+        Write-Host " Engine: vibe-coder.py (direct, no proxy)"
+        $env:OLLAMA_HOST = $OllamaHost
+    }
     Write-Host "============================================"
     Write-Host ""
-
-    $env:OLLAMA_HOST = $OllamaHost
     $env:VIBE_LOCAL_MODEL = $CfgModel
     $env:VIBE_LOCAL_SIDECAR_MODEL = if ($SidecarModel) { $SidecarModel } else { "" }
     $env:VIBE_LOCAL_DEBUG = "$VibeLocalDebug"
