@@ -1511,17 +1511,24 @@ class LLMClient:
     def check_model(self, model_name, available_models=None):
         """Check if a specific model is available (exact or tag match).
         If available_models is provided, skip redundant check_connection() call."""
+        return self.resolve_model_name(model_name, available_models=available_models) is not None
+
+    def resolve_model_name(self, model_name, available_models=None):
+        """Resolve user model name to an actual available model id/name.
+
+        Returns matched model string from backend list, or None.
+        """
         if available_models is None:
             ok, models = self.check_connection()
             if not ok:
-                return False
+                return None
         else:
             models = available_models
         want = model_name.strip()
         for m in models:
             if self._model_name_matches(want, m):
-                return True
-        return False
+                return m
+        return None
 
     @staticmethod
     def _normalize_model_name(name):
@@ -7622,7 +7629,10 @@ def main():
         print(f"{C.DIM}Please start LM Studio and enable API Server.{C.RESET}")
         sys.exit(1)
 
-    model_ok = client.check_model(config.model, available_models=models)
+    resolved_model = client.resolve_model_name(config.model, available_models=models)
+    model_ok = resolved_model is not None
+    if resolved_model and resolved_model != config.model:
+        config.model = resolved_model
 
     if not model_ok:
         auto_loaded = False
@@ -7631,7 +7641,10 @@ def main():
             auto_loaded, models_after, auto_reason = client.try_lmstudio_autoload(config.model)
             if auto_loaded:
                 models = models_after
-                model_ok = True
+                resolved_model = client.resolve_model_name(config.model, available_models=models)
+                if resolved_model:
+                    config.model = resolved_model
+                    model_ok = True
                 print(f"\n{C.GREEN}Model '{config.model}' was auto-loaded via LM Studio CLI.{C.RESET}")
 
     if not model_ok:
@@ -7905,12 +7918,15 @@ def main():
                             continue
                         # M4: Fetch fresh model list instead of using stale startup list
                         _ok, fresh_models = client.check_connection()
-                        if client.check_model(new_model, available_models=fresh_models if _ok else None):
-                            config.model = new_model
-                            config._apply_context_window(new_model)
-                            _tier, _ = Config.get_model_tier(new_model)
+                        resolved_new = client.resolve_model_name(new_model, available_models=fresh_models if _ok else None)
+                        if resolved_new:
+                            config.model = resolved_new
+                            config._apply_context_window(resolved_new)
+                            _tier, _ = Config.get_model_tier(resolved_new)
                             _tier_str = f" (Tier {_tier})" if _tier else ""
-                            print(f"{C.GREEN}Switched to model: {new_model}{_tier_str}{C.RESET}")
+                            print(f"{C.GREEN}Switched to model: {resolved_new}{_tier_str}{C.RESET}")
+                            if resolved_new != new_model:
+                                print(f"{C.DIM}Requested '{new_model}' resolved to '{resolved_new}'.{C.RESET}")
                             print(f"{C.DIM}Context window: {config.context_window} tokens{C.RESET}")
                         else:
                             avail = fresh_models if _ok else []
