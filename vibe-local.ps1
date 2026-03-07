@@ -7,6 +7,7 @@
 # Usage:
 #   vibe-local                       # Interactive mode
 #   vibe-local -p "question"         # One-shot
+#   vibe-local uninstall             # Uninstall
 #   vibe-local --auto                # Auto-detect network
 #   vibe-local --model qwen3:8b      # Manual model
 #   vibe-local -y                    # Skip permission check
@@ -16,6 +17,7 @@
 $Auto = $false
 $Yes = $false
 $DebugMode = $false
+$UninstallMode = $false
 $Model = ""
 $Prompt = ""
 $ExtraArgs = @()
@@ -24,6 +26,7 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     $arg = $args[$i]
     if ($arg -match '^(?i)(-Auto|--auto|-a)$') { $Auto = $true }
     elseif ($arg -match '^(?i)(-y|-Yes|--yes)$') { $Yes = $true }
+    elseif ($arg -match '^(?i)(uninstall|remove|--uninstall)$') { $UninstallMode = $true }
     elseif ($arg -match '^(?i)(-DebugMode|--debug|-d)$') { $DebugMode = $true }
     elseif ($arg -match '^(?i)(-Model|--model|-m)$') { 
         if ($i + 1 -lt $args.Count) { $Model = $args[$i+1]; $i++ }
@@ -35,6 +38,7 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 }
 
 $ErrorActionPreference = "Continue"
+$Script:LauncherPath = $PSCommandPath
 
 # --- UTF-8 encoding fix (PowerShell 文字化け対策) ---
 try {
@@ -62,6 +66,82 @@ $LLMEngine = "lmstudio"
 $LMStudioHost = "http://localhost:1234"
 $VibeLocalDebug = 0
 
+function Invoke-VibeLocalUninstall {
+    param(
+        [bool]$SkipConfirm = $false
+    )
+
+    $configDir = Join-Path $env:USERPROFILE ".config\vibe-local"
+    $stateDir = Join-Path $env:LOCALAPPDATA "vibe-local"
+    $libDir = Join-Path $env:USERPROFILE ".local\lib\vibe-local"
+    $binDir = Join-Path $env:USERPROFILE ".local\bin"
+    $targets = @(
+        $configDir,
+        $stateDir,
+        $libDir,
+        (Join-Path $binDir "vibe-local.cmd"),
+        (Join-Path $binDir "vibe-local.ps1"),
+        (Join-Path $binDir "vibe-local-uninstall.cmd"),
+        (Join-Path $binDir "vibe-local-uninstall.ps1")
+    )
+    $selfPath = $Script:LauncherPath
+    $deferredDelete = @()
+    $removed = 0
+
+    Write-Host ""
+    Write-Host "============================================"
+    Write-Host " Uninstall vibe-local"
+    Write-Host "============================================"
+    Write-Host ""
+    Write-Host "Targets:"
+    foreach ($path in $targets) { Write-Host "  - $path" }
+    Write-Host ""
+
+    if (-not $SkipConfirm) {
+        $confirm = Read-Host "Continue? [y/N]"
+        if ($confirm -notmatch '^[yY]') {
+            Write-Host "Canceled."
+            return
+        }
+    }
+
+    foreach ($path in $targets) {
+        if (Test-Path -LiteralPath $path) {
+            try {
+                $leaf = Split-Path -Leaf $path
+                if (($selfPath -and ($path -ieq $selfPath)) -or ($leaf -like "vibe-local*.cmd")) {
+                    $deferredDelete += $path
+                    continue
+                }
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+                Write-Host "  ✓ $path"
+                $removed++
+            } catch {
+                Write-Host "  ! Failed to remove: $path"
+            }
+        }
+    }
+
+    if ($deferredDelete.Count -gt 0) {
+        $quoted = ($deferredDelete | ForEach-Object { "'$($_.Replace("'", "''"))'" }) -join ", "
+        $cleanupScript = "Start-Sleep -Seconds 1; Remove-Item -LiteralPath @($quoted) -Force -ErrorAction SilentlyContinue"
+        Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command", $cleanupScript
+        ) | Out-Null
+        Write-Host "  ✓ launcher cleanup scheduled"
+    }
+
+    Write-Host ""
+    if ($removed -gt 0 -or $deferredDelete.Count -gt 0) {
+        Write-Host "Uninstall complete."
+    } else {
+        Write-Host "No installed files were found."
+    }
+    Write-Host "Note: LM Studio / Ollama are not removed."
+}
+
 # Parse config file (safe grep-style, no dot-sourcing)
 if (Test-Path $ConfigFile) {
     $configLines = Get-Content $ConfigFile -ErrorAction SilentlyContinue
@@ -74,6 +154,11 @@ if (Test-Path $ConfigFile) {
         if ($line -match '^\s*LMSTUDIO_HOST\s*=\s*"?([^"]*)"?\s*$') { $LMStudioHost = $Matches[1].Trim() }
         if ($line -match '^\s*VIBE_LOCAL_DEBUG\s*=\s*"?([01])"?\s*$') { $VibeLocalDebug = [int]$Matches[1] }
     }
+}
+
+if ($UninstallMode) {
+    Invoke-VibeLocalUninstall -SkipConfirm:$Yes
+    exit 0
 }
 
 # Command line overrides

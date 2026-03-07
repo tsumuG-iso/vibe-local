@@ -8,6 +8,7 @@
 # 使い方:
 #   vibe-local                    # インタラクティブモード
 #   vibe-local -p "質問"          # ワンショット
+#   vibe-local uninstall          # アンインストール
 #   vibe-local --auto             # ネットワーク状況で自動判定
 #   vibe-local --model qwen3:8b   # モデル手動指定
 #   vibe-local -y                 # パーミッション確認スキップ (自己責任)
@@ -37,6 +38,64 @@ VIBE_LOCAL_DEBUG=0
 LMSTUDIO_HOST="http://localhost:1234"
 LMSTUDIO_API_PATH="/v1"
 
+run_uninstall() {
+    local auto_yes="${1:-0}"
+    local config_dir="${HOME}/.config/vibe-local"
+    local state_dir="${HOME}/.local/state/vibe-local"
+    local lib_dir="${HOME}/.local/lib/vibe-local"
+    local bin_dir="${HOME}/.local/bin"
+    local targets=(
+        "$config_dir"
+        "$state_dir"
+        "$lib_dir"
+        "$bin_dir/vibe-local"
+        "$bin_dir/vibe-coder"
+        "$bin_dir/vibe-local-uninstall"
+    )
+    local removed=0
+
+    echo ""
+    echo "============================================"
+    echo " 🗑️  vibe-local Uninstall"
+    echo "============================================"
+    echo ""
+    echo "削除対象:"
+    printf '  - %s\n' "${targets[@]}"
+    echo ""
+
+    if [ "$auto_yes" -ne 1 ]; then
+        printf "本当に削除しますか？ [y/N]: "
+        read -r reply </dev/tty 2>/dev/null || read -r reply 2>/dev/null || reply="n"
+        case "$reply" in
+            [yY]|[yY][eE][sS]|はい|是) ;;
+            *)
+                echo "キャンセルしました。"
+                return 0
+                ;;
+        esac
+    fi
+
+    for path in "${targets[@]}"; do
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            rm -rf "$path" 2>/dev/null || true
+            if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+                echo "  ✓ $path"
+                removed=$((removed + 1))
+            else
+                echo "  ! 削除できませんでした: $path"
+            fi
+        fi
+    done
+
+    echo ""
+    if [ "$removed" -gt 0 ]; then
+        echo "✅ アンインストール完了"
+    else
+        echo "ℹ️ 削除対象は見つかりませんでした"
+    fi
+    echo "注: LM Studio / Ollama 本体は削除しません。"
+}
+
 # [C1 fix] source ではなく grep + cut で既知キーのみ安全に読む
 # cut is safer than sed for values containing special characters
 if [ -f "$CONFIG_FILE" ]; then
@@ -60,6 +119,18 @@ fi
 # --- 環境変数から設定を読み込み ---
 [ -n "$VIBE_LOCAL_ENGINE" ] && LLM_ENGINE="$VIBE_LOCAL_ENGINE"
 [ -n "$LMSTUDIO_HOST" ] && true || LMSTUDIO_HOST="http://localhost:1234"
+
+# Uninstall should work even when python/vibe-coder are missing.
+if [[ "${1:-}" == "uninstall" || "${1:-}" == "remove" || "${1:-}" == "--uninstall" ]]; then
+    _u_yes=0
+    for _arg in "$@"; do
+        case "$_arg" in
+            -y|--yes|--dangerously-skip-permissions) _u_yes=1 ;;
+        esac
+    done
+    run_uninstall "$_u_yes"
+    exit 0
+fi
 
 
 # --- python3 存在確認 ---
@@ -114,12 +185,17 @@ check_network() {
 # --- 引数パース ---
 AUTO_MODE=0
 YES_FLAG=0
+UNINSTALL_MODE=0
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --auto)
             AUTO_MODE=1
+            shift
+            ;;
+        uninstall|remove|--uninstall)
+            UNINSTALL_MODE=1
             shift
             ;;
         --model)
@@ -158,6 +234,7 @@ vibe-local - Free AI Coding Agent for Local LLMs
 使い方:
   vibe-local                    # インタラクティブモード
   vibe-local -p "質問"          # ワンショット
+  vibe-local uninstall          # アンインストール
   vibe-local --auto             # ネットワーク状況で自動判定
   vibe-local --model <name>     # モデル手動指定
   vibe-local -y                 # パーミッション確認スキップ (自己責任)
@@ -186,6 +263,11 @@ HELP
             ;;
     esac
 done
+
+if [ "$UNINSTALL_MODE" -eq 1 ]; then
+    run_uninstall "$YES_FLAG"
+    exit 0
+fi
 
 # --- 自動判定モード ---
 if [ "$AUTO_MODE" -eq 1 ]; then

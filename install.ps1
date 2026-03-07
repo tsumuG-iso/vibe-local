@@ -807,8 +807,13 @@ if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "vibe-coder.py"))) {
     }
 }
 
+Set-Content -Path (Join-Path $BinDir "vibe-local-uninstall.cmd") -Value '@echo off
+call "%~dp0vibe-local.cmd" uninstall %*' -Encoding ASCII
+Set-Content -Path (Join-Path $BinDir "vibe-local-uninstall.ps1") -Value '& "$PSScriptRoot\vibe-local.ps1" uninstall @args' -Encoding UTF8
+
 Vapor-Success "vibe-coder.py -> $LibDir"
 Vapor-Success "Command -> $BinDir\vibe-local.cmd"
+Vapor-Success "Command -> $BinDir\vibe-local-uninstall.cmd"
 
 # =============================================
 # Step 6: Config generation

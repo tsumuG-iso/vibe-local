@@ -1002,8 +1002,14 @@ else
 fi
 
 chmod +x "$BIN_DIR/vibe-local"
+cat > "$BIN_DIR/vibe-local-uninstall" <<'EOF'
+#!/bin/bash
+exec "${HOME}/.local/bin/vibe-local" uninstall "$@"
+EOF
+chmod +x "$BIN_DIR/vibe-local-uninstall"
 vapor_success "vibe-coder.py → $LIB_DIR/"
 vapor_success "Command → $BIN_DIR/vibe-local"
+vapor_success "Command → $BIN_DIR/vibe-local-uninstall"
 
 # =============================================
 # Step 6: 設定ファイル生成
