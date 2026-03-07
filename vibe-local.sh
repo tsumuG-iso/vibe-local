@@ -29,7 +29,7 @@ VIBE_CODER_SCRIPT="${LIB_DIR}/vibe-coder.py"
 # デフォルト値
 MODEL=""
 SIDECAR_MODEL=""
-LLM_ENGINE="ollama"  # ollama または lmstudio
+LLM_ENGINE="lmstudio"  # デフォルトはLM Studio
 OLLAMA_HOST="http://localhost:11434"
 VIBE_LOCAL_DEBUG=0
 
@@ -61,17 +61,6 @@ fi
 [ -n "$VIBE_LOCAL_ENGINE" ] && LLM_ENGINE="$VIBE_LOCAL_ENGINE"
 [ -n "$LMSTUDIO_HOST" ] && true || LMSTUDIO_HOST="http://localhost:1234"
 
-# [SEC] Validate OLLAMA_HOST - only allow localhost (SSRF prevention)
-# Strict regex: reject @-credential injection (e.g. http://localhost:11434@attacker.com)
-_host_valid=0
-if [[ "$OLLAMA_HOST" =~ ^http://(localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}(/.*)?$ ]]; then
-    [[ "$OLLAMA_HOST" != *@* ]] && _host_valid=1
-fi
-if [ "$_host_valid" -eq 0 ]; then
-    echo "⚠️  OLLAMA_HOST='$OLLAMA_HOST' はlocalhostではありません。セキュリティのためlocalhostにリセットします。"
-    OLLAMA_HOST="http://localhost:11434"
-fi
-unset _host_valid
 
 # --- python3 存在確認 ---
 if ! command -v python3 &>/dev/null; then
@@ -96,53 +85,9 @@ if [ ! -f "$VIBE_CODER_SCRIPT" ]; then
     fi
 fi
 
-# --- LLMエンジン (Ollama/LM Studio) が起動しているか確認・起動 ---
+# --- LLMエンジン (LM Studio) が起動しているか確認 ---
 ensure_llm_engine() {
-    if [ "$LLM_ENGINE" = "lmstudio" ]; then
-        ensure_lmstudio
-    else
-        ensure_ollama
-    fi
-}
-
-ensure_ollama() {
-    if curl -s --max-time 2 "$OLLAMA_HOST/api/tags" &>/dev/null; then
-        return 0
-    fi
-
-    if ! command -v ollama &>/dev/null; then
-        echo "❌ エラー: ollama コマンドが見つかりません"
-        echo ""
-        echo "インストール方法:"
-        echo "  macOS: brew install ollama  または  https://ollama.com/download"
-        echo "  Linux: curl -fsSL https://ollama.com/install.sh | sh"
-        return 1
-    fi
-
-    echo "🦙 ollama を起動中..."
-    if [[ "$(uname)" == "Darwin" ]]; then
-        open -a Ollama 2>/dev/null || (ollama serve &>/dev/null &)
-    else
-        ollama serve &>/dev/null &
-    fi
-
-    for i in $(seq 1 15); do
-        printf "\r  🦙 ollama 起動待ち... %ds " "$((i * 2))"
-        sleep 2
-        if curl -s --max-time 2 "$OLLAMA_HOST/api/tags" &>/dev/null; then
-            printf "\r%-40s\n" ""
-            echo "✅ ollama 起動完了"
-            return 0
-        fi
-    done
-    printf "\r%-40s\n" ""
-
-    echo "❌ エラー: ollama が起動できませんでした"
-    echo ""
-    echo "対処法:"
-    echo "  macOS: Ollama アプリを手動で起動してください"
-    echo "  Linux: ollama serve を実行してください"
-    return 1
+    ensure_lmstudio
 }
 
 ensure_lmstudio() {
@@ -215,19 +160,17 @@ vibe-local - Free AI Coding Agent for Local LLMs
   vibe-local -p "質問"          # ワンショット
   vibe-local --auto             # ネットワーク状況で自動判定
   vibe-local --model <name>     # モデル手動指定
-  vibe-local --engine <name>    # LLMエンジン指定 (ollama/lmstudio)
   vibe-local -y                 # パーミッション確認スキップ (自己責任)
   vibe-local --debug            # デバッグモード
 
 LLMエンジン:
-  ollama      - Ollamaを使用 (デフォルト)
-  lmstudio    - LM Studioを使用
+  lmstudio    - LM Studioを使用 (デフォルト)
 
 設定ファイル:
   ~/.config/vibe-local/config
   設定例:
     LLM_ENGINE=lmstudio
-    MODEL=qwen3:8b
+    MODEL=qwen3.5-9b
 
 環境変数:
   VIBE_LOCAL_ENGINE=lmstudio     # LLMエンジンを指定
@@ -271,92 +214,6 @@ fi
 MODEL_ARGS=()
 if [ -n "$MODEL" ]; then
     MODEL_ARGS+=(--model "$MODEL")
-fi
-
-# モデルがロード済みか確認 (モデルが指定されている場合のみ)
-if [ -n "$MODEL" ]; then
-    _model_found=0
-    # LLM_ENGINEに応じてAPIエンドポイントを設定
-    if [ "$LLM_ENGINE" = "lmstudio" ]; then
-        _api_endpoint="$LMSTUDIO_HOST${LMSTUDIO_API_PATH}/models"
-        _api_response="$(curl -s "$_api_endpoint" 2>/dev/null)"
-    else
-        _api_endpoint="$OLLAMA_HOST/api/tags"
-        _api_response="$(curl -s "$_api_endpoint" 2>/dev/null)"
-    fi
-
-    if [ -n "$_api_response" ]; then
-        # LM StudioとOllamaでレスポンス形式が異なる
-        if [ "$LLM_ENGINE" = "lmstudio" ]; then
-            # LM Studio: {"object":"list","data":[{"id":"model-name",...}]}
-            if echo "$_api_response" | TARGET_MODEL="$MODEL" python3 -c "
-import sys,json,os
-try:
-    d=json.load(sys.stdin)
-    names=[m.get('id','') for m in d.get('data',[])]
-    want=os.environ['TARGET_MODEL'].strip()
-    found = want in names or any(want in n for n in names)
-    sys.exit(0 if found else 1)
-except: sys.exit(1)
-" 2>/dev/null; then
-                _model_found=1
-            fi
-        else
-            # Ollama: {"models":[{"name":"model-name",...}]}
-            if echo "$_api_response" | TARGET_MODEL="$MODEL" python3 -c "
-import sys,json,os
-try:
-    d=json.load(sys.stdin)
-    names=[m['name'].strip() for m in d.get('models',[])]
-    want=os.environ['TARGET_MODEL'].strip()
-    found = want in names or want+':latest' in names
-    found = found or any(n.startswith(want+':') or n.startswith(want+'-') or n==want for n in names)
-    want_base = want.split(':')[0] if ':' in want else want
-    found = found or any(n.split(':')[0] == want_base for n in names)
-    sys.exit(0 if found else 1)
-except: sys.exit(1)
-" 2>/dev/null; then
-                _model_found=1
-            elif echo "$_api_response" | grep -qF "$MODEL"; then
-                _model_found=1
-            fi
-        fi
-    fi
-    if [ "$_model_found" -eq 0 ]; then
-        echo "❌ AIモデル $MODEL が見つかりません"
-        echo ""
-        if [ "$LLM_ENGINE" = "lmstudio" ]; then
-            echo "対処法:"
-            echo "  1. LM Studioでモデルをロードしてください"
-            echo "  2. モデル名が正しいか確認してください"
-            echo ""
-            echo "インストール済みモデル:"
-            curl -s "$LMSTUDIO_HOST${LMSTUDIO_API_PATH}/models" 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for m in data.get('data', []):
-        print(f\"  - {m.get('id','unknown')}\")
-except: pass
-" 2>/dev/null || echo "  (一覧取得失敗)"
-        else
-            echo "ダウンロードするには、以下のコマンドを貼り付けてEnterを押してください:"
-            echo "  ollama pull \"$MODEL\""
-            echo ""
-            echo "(数分～数十分かかります。完了後に再度 vibe-local を実行してください)"
-            echo ""
-            echo "インストール済みモデル:"
-            curl -s "$OLLAMA_HOST/api/tags" 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for m in data.get('models', []):
-        print(f\"  - {m['name']}\")
-except: pass
-" 2>/dev/null || echo "  (一覧取得失敗)"
-        fi
-        exit 1
-    fi
 fi
 
 # --- パーミッション確認 ---
@@ -412,11 +269,7 @@ if [ -n "$MODEL" ]; then
 else
     echo " Model: (auto-detect)"
 fi
-if [ "$LLM_ENGINE" = "lmstudio" ]; then
-    echo " Engine: LM Studio ($LMSTUDIO_HOST${LMSTUDIO_API_PATH})"
-else
-    echo " Engine: Ollama ($OLLAMA_HOST)"
-fi
+echo " Engine: LM Studio ($LMSTUDIO_HOST${LMSTUDIO_API_PATH})"
 echo "============================================"
 echo ""
 

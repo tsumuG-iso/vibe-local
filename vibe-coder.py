@@ -702,7 +702,7 @@ class Config:
 
     def __init__(self):
         self.ollama_host = self.DEFAULT_OLLAMA_HOST
-        self.llm_engine = "ollama"  # ollama or lmstudio
+        self.llm_engine = "lmstudio"  # lmstudio
         self.model = self.DEFAULT_MODEL
         self.sidecar_model = self.DEFAULT_SIDECAR
         self.max_tokens = self.DEFAULT_MAX_TOKENS
@@ -785,6 +785,8 @@ class Config:
                         self.model = val
                     elif key == "SIDECAR_MODEL" and val:
                         self.sidecar_model = val
+                    elif key == "LLM_ENGINE" and val:
+                        self.llm_engine = val
                     elif key == "OLLAMA_HOST" and val:
                         self.ollama_host = val
                     elif key == "MAX_TOKENS" and val:
@@ -5939,7 +5941,7 @@ class TUI:
         else:
             print(*args, **kwargs)
 
-    def banner(self, config, model_ok=True):
+    def banner(self, config):
         """Print spectacular startup banner — vaporwave/neon aesthetic.
         Adapts to terminal width for narrow terminals."""
         term_w = _get_terminal_width()
@@ -5977,7 +5979,7 @@ class TUI:
         # Subtitle with neon glow effect
         print(f"\n  {_ansi(chr(27)+'[38;5;51m')}{C.BOLD}🌴 O F F L I N E  A I  C O D I N G  A G E N T 🌴{C.RESET}")
         print(f"  {_ansi(chr(27)+'[38;5;87m')}v{__version__}{C.RESET}  "
-              f"{C.DIM}// No login • No cloud • Fully OSS • Powered by Ollama{C.RESET}")
+              f"{C.DIM}// No login • No cloud • Fully OSS • Powered by LM Studio{C.RESET}")
 
         # Adaptive rainbow separator (use ── U+2500 Na width, safe for CJK terminals)
         sep_colors = [198, 199, 200, 201, 165, 129, 93, 57, 51, 45, 39, 33, 27, 33, 39, 45, 51, 57, 93, 129, 165, 201, 200, 199]
@@ -5992,8 +5994,8 @@ class TUI:
         # System info with icons
         ram = _get_ram_gb()
         mode_str = f"{_ansi(chr(27)+'[38;5;46m')}✓ AUTO-APPROVE{C.RESET}" if config.yes_mode else f"{_ansi(chr(27)+'[38;5;226m')}◆ CONFIRM{C.RESET}"
-        model_color = _ansi(chr(27)+"[38;5;51m") if model_ok else _ansi(chr(27)+"[38;5;196m")
-        model_icon = "🧠" if model_ok else "⚠️ "
+        model_color = _ansi(chr(27)+"[38;5;51m")
+        model_icon = "🧠"
         info_dim = C.DIM
         info_bright = _ansi(chr(27)+"[38;5;87m")
 
@@ -6012,13 +6014,10 @@ class TUI:
                 _sc_tier_str = " %s[Tier %s]%s" % (_ansi(chr(27) + "[38;5;%sm" % _sc_tc), _sc_tier, C.RESET)
             print(f"  🔄 {info_dim}Sidecar{C.RESET} {info_bright}{config.sidecar_model}{C.RESET}{_sc_tier_str}")
         print(f"  🔒 {info_dim}Mode{C.RESET}   {mode_str}")
-        print(f"  🦙 {info_dim}Engine{C.RESET} {info_bright}Ollama{C.RESET} {C.DIM}({config.ollama_host}){C.RESET}")
+        engine_name = config.llm_engine.title() if config.llm_engine == "lmstudio" else config.llm_engine
+        print(f"  🦙 {info_dim}Engine{C.RESET} {info_bright}{engine_name}{C.RESET} {C.DIM}({config.ollama_host}){C.RESET}")
         print(f"  💾 {info_dim}RAM{C.RESET}    {info_bright}{ram}GB{C.RESET} {C.DIM}(ctx: {config.context_window} tokens){C.RESET}")
         print(f"  📁 {info_dim}CWD{C.RESET}    {C.WHITE}{os.getcwd()}{C.RESET}")
-
-        if not model_ok:
-            print(f"\n  {C.RED}⚠ Model '{config.model}' not downloaded yet.{C.RESET}")
-            print(f"  {C.DIM}  Download it:  ollama pull {config.model}{C.RESET}")
 
         print(sep_line)
         # Recommend -y mode if not already enabled
@@ -7507,84 +7506,36 @@ def main():
     # Show banner immediately so user sees output while connecting
     tui = TUI(config)
     if not config.prompt:
-        tui.banner(config, model_ok=True)  # skip banner in one-shot mode (-p)
+        tui.banner(config)  # skip banner in one-shot mode (-p)
 
-    # Check Ollama connection
+    # Check LM Studio connection
     client = OllamaClient(config)
     ok, models = client.check_connection()
+
     if not ok:
-        print(f"\n{C.RED}Ollama (the local AI engine) is not running.{C.RESET}")
-        if platform.system() == "Darwin":
-            print(f"{C.DIM}Look for the llama icon in your menu bar, or open the Ollama app.{C.RESET}")
-        else:
-            print(f"{C.DIM}Start it by running this in another terminal:  ollama serve{C.RESET}")
-        # Try to auto-start Ollama on macOS and Linux
-        if shutil.which("ollama"):
-            try:
-                ans = "y" if config.yes_mode else input(
-                    f"{_ansi(chr(27)+'[38;5;51m')}Try to start Ollama automatically? [Y/n]: {C.RESET}"
-                ).strip().lower()
-                if ans in ("", "y", "yes"):
-                    if platform.system() == "Darwin":
-                        # Try macOS app first, fall back to CLI
-                        try:
-                            subprocess.Popen(
-                                ["open", "-a", "Ollama"],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            )
-                        except Exception:
-                            subprocess.Popen(
-                                ["ollama", "serve"],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                start_new_session=True,
-                            )
-                    else:
-                        subprocess.Popen(
-                            ["ollama", "serve"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True,
-                        )
-                    print(f"{_ansi(chr(27)+'[38;5;51m')}Starting Ollama... waiting up to 10s{C.RESET}")
-                    for _wait in range(10):
-                        time.sleep(1)
-                        ok, models = client.check_connection()
-                        if ok:
-                            print(f"{C.GREEN}Ollama started successfully!{C.RESET}")
-                            break
-            except (EOFError, KeyboardInterrupt):
-                print()
-            except Exception:
-                pass
-        if not ok:
-            sys.exit(1)
+        print(f"\n{C.RED}LM Studio is not running.{C.RESET}")
+        print(f"{C.DIM}Please start LM Studio and enable API Server.{C.RESET}")
+        sys.exit(1)
 
     model_ok = client.check_model(config.model, available_models=models)
 
     if not model_ok:
-        print(f"\n{C.YELLOW}The AI model '{config.model}' hasn't been downloaded yet.{C.RESET}")
+        print(f"\n{C.YELLOW}The AI model '{config.model}' is not found.{C.RESET}")
         if models:
-            print(f"{C.DIM}Models already downloaded: {', '.join(models)}{C.RESET}")
+            print(f"{C.DIM}Available models: {', '.join(models[:5])}{C.RESET}")
         else:
             print(f"{C.DIM}No models downloaded yet.{C.RESET}")
-        do_pull = False
-        if config.yes_mode:
-            do_pull = True
-        else:
-            try:
-                ans = input(f"{C.CYAN}Download '{config.model}' now? (may be several GB) [Y/n]: {C.RESET}").strip().lower()
-                do_pull = ans in ("", "y", "yes")
-            except (EOFError, KeyboardInterrupt):
-                print()
-        if do_pull:
-            print(f"{C.CYAN}Downloading {config.model}... (this may take a few minutes){C.RESET}")
-            if client.pull_model(config.model):
-                print(f"{C.GREEN}Download complete: {config.model}{C.RESET}")
-                model_ok = True
+
+        try:
+            ans = input(f"{C.CYAN}Download '{config.model}' in LM Studio? [Y/n]: {C.RESET}").strip().lower()
+            if ans in ("", "y", "yes"):
+                print(f"{C.DIM}Please open LM Studio and download the model manually.{C.RESET}")
+                print(f"{C.DIM}After downloading, run vibe-local again.{C.RESET}")
             else:
-                print(f"{C.RED}Download failed. Try manually:  ollama pull {config.model}{C.RESET}")
-                sys.exit(1)
-        else:
-            print(f"{C.DIM}Skipping download. The AI may not work until the model is downloaded.{C.RESET}")
+                print(f"{C.DIM}To use a different model, set MODEL in config file.{C.RESET}")
+        except (EOFError, KeyboardInterrupt):
+            print()
+        sys.exit(1)
 
     # Setup components
     system_prompt = _build_system_prompt(config)

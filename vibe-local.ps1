@@ -58,7 +58,7 @@ $VibeCoderScript = Join-Path $LibDir "vibe-coder.py"
 $CfgModel = ""
 $SidecarModel = ""
 $OllamaHost = "http://localhost:11434"
-$LLMEngine = "ollama"
+$LLMEngine = "lmstudio"
 $LMStudioHost = "http://localhost:1234"
 $VibeLocalDebug = 0
 
@@ -131,63 +131,27 @@ if (-not $PythonCmd) {
     exit 1
 }
 
-# --- Ensure Ollama is running ---
-function Test-OllamaRunning {
-    # Use Invoke-WebRequest instead of Invoke-RestMethod for more robust detection
-    # Invoke-RestMethod can fail on non-JSON responses; Invoke-WebRequest checks HTTP status
+# --- Ensure LM Studio is running ---
+function Test-LMStudioRunning {
     try {
-        $resp = Invoke-WebRequest -Uri "$OllamaHost/api/tags" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+        $resp = Invoke-WebRequest -Uri "$LMStudioHost/v1/models" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
         return ($resp.StatusCode -eq 200)
     } catch {
-        # Fallback: try TCP connection to the port directly
-        try {
-            $uri = [System.Uri]::new($OllamaHost)
-            $tcp = New-Object System.Net.Sockets.TcpClient
-            $tcp.Connect($uri.Host, $uri.Port)
-            $tcp.Close()
-            return $true
-        } catch {
-            return $false
-        }
+        return $false
     }
 }
 
-function Ensure-Ollama {
-    # First check: is Ollama already running?
-    if (Test-OllamaRunning) {
-        return $true
-    }
-
-    # Not running — check if ollama command exists
-    $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
-    if (-not $ollamaCmd) {
-        Write-Host "Error: Ollama is not installed." -ForegroundColor Red
-        Write-Host "  Install it: winget install Ollama.Ollama"
-        Write-Host "  Or download from: https://ollama.com/download"
+function Ensure-LMStudio {
+    if (-not (Test-LMStudioRunning)) {
+        Write-Host "Error: LM Studio is not running." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "対処法:" -ForegroundColor Yellow
+        Write-Host "  1. LM Studioを起動してください"
+        Write-Host "  2. Settings → API Server を有効にしてください"
+        Write-Host "  3. Portが $LMStudioHost であることを確認してください"
         return $false
     }
-
-    Write-Host "Starting Ollama..." -ForegroundColor Cyan
-    try {
-        Start-Process ollama -ArgumentList "serve" -WindowStyle Hidden -ErrorAction Stop
-    } catch {
-        Write-Host "Error: Could not start Ollama. Try running 'ollama serve' manually." -ForegroundColor Red
-        return $false
-    }
-
-    for ($i = 1; $i -le 15; $i++) {
-        Write-Host "`r  Waiting for Ollama... $($i * 2)s " -NoNewline
-        Start-Sleep -Seconds 2
-        if (Test-OllamaRunning) {
-            Write-Host "`r                                    "
-            Write-Host "Ollama started successfully" -ForegroundColor Green
-            return $true
-        }
-    }
-    Write-Host ""
-    Write-Host "Error: Ollama failed to start within 30 seconds" -ForegroundColor Red
-    Write-Host "  Try running 'ollama serve' in a separate terminal" -ForegroundColor Yellow
-    return $false
+    return $true
 }
 
 # --- Network check ---
@@ -217,36 +181,8 @@ if ($Auto) {
 
 # --- Local mode startup ---
 try {
-    if (-not (Ensure-Ollama)) {
-        Write-Host "Cannot start Ollama. Exiting." -ForegroundColor Red
+    if (-not (Ensure-LMStudio)) {
         exit 1
-    }
-
-    # Check model is available (if specified)
-    if ($CfgModel) {
-        try {
-            $resp = Invoke-WebRequest -Uri "$OllamaHost/api/tags" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-            $tags = $resp.Content | ConvertFrom-Json
-            $modelNames = @($tags.models | ForEach-Object { $_.name })
-            $modelBase = ($CfgModel -split ':')[0]
-            $modelFound = $modelNames | Where-Object {
-                $_ -eq $CfgModel -or
-                $_ -eq "$CfgModel`:latest" -or
-                ($_ -split ':')[0] -eq $modelBase
-            }
-            if (-not $modelFound) {
-                Write-Host "Error: Model '$CfgModel' hasn't been downloaded yet." -ForegroundColor Red
-                Write-Host ""
-                Write-Host "  Download it by running:"
-                Write-Host "    ollama pull `"$CfgModel`""
-                Write-Host ""
-                Write-Host "  Available models:" -ForegroundColor Cyan
-                foreach ($m in $modelNames) { Write-Host "    - $m" }
-                exit 1
-            }
-        } catch {
-            Write-Host "Warning: Could not verify model availability" -ForegroundColor Yellow
-        }
     }
 
     # --- Permission check ---
@@ -297,14 +233,7 @@ try {
     } else {
         Write-Host " Model: (auto-detect)"
     }
-    if ($LLMEngine -eq "lmstudio") {
-        Write-Host " Engine: LM Studio ($LMStudioHost)"
-        $env:OLLAMA_HOST = "$LMStudioHost/v1"
-    } else {
-        Write-Host " Ollama: $OllamaHost"
-        Write-Host " Engine: vibe-coder.py (direct, no proxy)"
-        $env:OLLAMA_HOST = $OllamaHost
-    }
+    Write-Host " Engine: LM Studio ($LMStudioHost)"
     Write-Host "============================================"
     Write-Host ""
     $env:VIBE_LOCAL_MODEL = $CfgModel
