@@ -420,10 +420,10 @@ if ($Model) {
     Write-Host "  ${NEON_GREEN}|${NC}    ${BOLD}${WHITE}${SelectedModel}${NC} ${DIM}(19GB, MoE 3.3B active, $(msg 'model_best'))${NC}"
     Write-Host "  ${NEON_GREEN}|${NC}    ${DIM}+ sidecar: ${SidecarModel} (5GB, fast helper)${NC}"
 } elseif ($RamGB -ge 16) {
-    $SelectedModel = "qwen3:8b"
+    $SelectedModel = "qwen3.5-9b"
     $SidecarModel = "qwen3:1.7b"
     Write-Host "  ${MINT}|${NC} ${BOLD}${CYAN}** GREAT MODEL **${NC}"
-    Write-Host "  ${MINT}|${NC}    ${BOLD}${WHITE}${SelectedModel}${NC} ${DIM}(5GB, $(msg 'model_great'))${NC}"
+    Write-Host "  ${MINT}|${NC}    ${BOLD}${WHITE}${SelectedModel}${NC} ${DIM}(6GB, $(msg 'model_great'))${NC}"
     Write-Host "  ${MINT}|${NC}    ${DIM}+ sidecar: ${SidecarModel} (1.1GB, fast helper)${NC}"
 } elseif ($RamGB -ge 8) {
     $SelectedModel = "qwen3:1.7b"

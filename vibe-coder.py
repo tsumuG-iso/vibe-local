@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-vibe-coder — Open-source coding agent powered by Ollama
+vibe-coder — Open-source coding agent powered by Ollama/LM Studio
 Replaces Claude Code CLI: no login, no Node.js, no proxy, fully OSS.
 
 Usage:
@@ -810,6 +810,8 @@ class Config:
     def _load_env(self):
         if os.environ.get("OLLAMA_HOST"):
             self.ollama_host = os.environ["OLLAMA_HOST"]
+        if os.environ.get("LLM_HOST"):
+            self.ollama_host = os.environ["LLM_HOST"]
         # VIBE_CODER_* are legacy env vars; VIBE_LOCAL_* take precedence (loaded second)
         if os.environ.get("VIBE_LOCAL_ENGINE"):
             self.llm_engine = os.environ["VIBE_LOCAL_ENGINE"]
@@ -843,16 +845,16 @@ class Config:
                 argv.append(a)
         parser = argparse.ArgumentParser(
             prog="vibe-coder",
-            description="Open-source coding agent powered by Ollama",
+            description="Open-source coding agent powered by Ollama/LM Studio",
         )
         parser.add_argument("-p", "--prompt", help="One-shot prompt (non-interactive)")
-        parser.add_argument("-m", "--model", help="Ollama model name")
+        parser.add_argument("-m", "--model", help="Model name")
         parser.add_argument("-y", "--yes", action="store_true", help="Auto-approve all tool calls")
         parser.add_argument("--debug", action="store_true", help="Debug mode")
         parser.add_argument("--resume", action="store_true", help="Resume last session")
         parser.add_argument("--session-id", help="Resume specific session")
         parser.add_argument("--list-sessions", action="store_true", help="List saved sessions")
-        parser.add_argument("--ollama-host", help="Ollama host URL")
+        parser.add_argument("--ollama-host", help="LLM host URL")
         parser.add_argument("--max-tokens", type=int, help="Max output tokens")
         parser.add_argument("--temperature", type=float, help="Sampling temperature")
         parser.add_argument("--context-window", type=int, help="Context window size")
@@ -867,7 +869,7 @@ class Config:
         parser.add_argument("--rag-topk", type=int, default=None,
                             help="Number of top results for RAG (default: 5 when not specified)")
         parser.add_argument("--rag-model", default="nomic-embed-text",
-                            help="Ollama embedding model (default: nomic-embed-text)")
+                            help="Embedding model (default: nomic-embed-text)")
         parser.add_argument("--rag-index", metavar="PATH",
                             help="Index files at PATH for RAG and exit")
         args = parser.parse_args(argv)
@@ -976,6 +978,7 @@ class Config:
         ("starcoder2:15b",           16, "C"),
         ("qwen3:14b",                16, "C"),
         # Tier D — Lightweight: fast, decent quality
+        ("qwen3.5-9b",                8, "D"),
         ("qwen3:8b",                  8, "D"),
         ("llama3.1:8b",               8, "D"),
         ("deepseek-coder:6.7b",       8, "D"),
@@ -999,7 +1002,7 @@ class Config:
         # (Apple Silicon uses unified memory, so ram_gb already covers it)
         vram_gb = _get_vram_gb()
         effective_mem_gb = max(ram_gb, vram_gb) if vram_gb > 0 else ram_gb
-        # Try smart detection: query Ollama for installed models
+        # Try smart detection: query LLM engine for installed models
         installed = self._query_installed_models()
         if installed:
             best = self._pick_best_model(installed, effective_mem_gb)
@@ -1009,11 +1012,11 @@ class Config:
                 if not self.sidecar_model:
                     self._pick_sidecar(installed, best, effective_mem_gb)
                 return
-        # Fallback: RAM-based heuristic (no Ollama connection yet)
+        # Fallback: RAM-based heuristic (no LLM engine connection yet)
         if effective_mem_gb >= 32:
             self.model = "qwen3-coder:30b"
         elif effective_mem_gb >= 16:
-            self.model = "qwen3:8b"
+            self.model = "qwen3.5-9b"
         else:
             self.model = "qwen3:1.7b"
             self.context_window = 4096
@@ -1024,15 +1027,23 @@ class Config:
                 self.sidecar_model = "qwen3:1.7b"
 
     def _query_installed_models(self):
-        """Query Ollama API for installed model names. Returns list or empty."""
-        url = f"{self.ollama_host}/api/tags"
+        """Query LLM engine API for installed model names. Returns list or empty."""
+        # LM Studio uses /v1/models, Ollama uses /api/tags
+        if self.llm_engine == "lmstudio":
+            url = f"{self.ollama_host}/v1/models"
+        else:
+            url = f"{self.ollama_host}/api/tags"
         try:
             resp = urllib.request.urlopen(url, timeout=3)
             try:
                 data = json.loads(resp.read(10 * 1024 * 1024))
             finally:
                 resp.close()
-            return [m["name"].strip() for m in data.get("models", [])]
+            # LM Studio uses "id", Ollama uses "name"
+            if self.llm_engine == "lmstudio":
+                return [m.get("id", "").strip() for m in data.get("data", [])]
+            else:
+                return [m.get("name", "").strip() for m in data.get("models", [])]
         except Exception:
             return []
 
@@ -1094,7 +1105,7 @@ class Config:
         hostname = parsed.hostname or ""
         allowed = {"localhost", "127.0.0.1", "::1", "[::1]"}
         if hostname not in allowed:
-            print(f"{C.YELLOW}Warning: OLLAMA_HOST '{hostname}' is not localhost. "
+            print(f"{C.YELLOW}Warning: LLM host '{hostname}' is not localhost. "
                   f"Resetting to localhost for security.{C.RESET}", file=sys.stderr)
             self.ollama_host = self.DEFAULT_OLLAMA_HOST
         # Strip credentials from URL to prevent leaking in banner/errors
@@ -1403,11 +1414,11 @@ IMPORTANT — This is Windows (NOT Linux/macOS):
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# OllamaClient — Direct communication with Ollama OpenAI-compatible API
+# LLMClient — Direct communication with LLM engine OpenAI-compatible API
 # ════════════════════════════════════════════════════════════════════════════════
 
-class OllamaClient:
-    """Communicates with Ollama or LM Studio via OpenAI-compatible API."""
+class LLMClient:
+    """Communicates with LLM engine (Ollama/LM Studio) via OpenAI-compatible API."""
 
     def __init__(self, config):
         self.llm_engine = getattr(config, 'llm_engine', 'ollama')
@@ -1518,7 +1529,7 @@ class OllamaClient:
         return False
 
     def pull_model(self, model_name):
-        """Pull a model from the Ollama registry. Streams progress to stdout.
+        """Pull a model from the LLM engine registry. Streams progress to stdout.
 
         Returns True on success, False on failure.
         """
@@ -1569,11 +1580,11 @@ class OllamaClient:
 
     @staticmethod
     def _prepare_messages_for_native(messages):
-        """Convert messages from internal/OpenAI format to Ollama native /api/chat format.
+        """Convert messages from internal/OpenAI format to LLM engine native /api/chat format.
 
         - tool_calls arguments: str → dict (native API requires dict)
         - multipart image content: [{type: image_url, ...}] → images: [base64]
-        - Extra fields (tool_call_id, type on tool_calls) are kept; Ollama ignores unknown fields.
+        - Extra fields (tool_call_id, type on tool_calls) are kept; LLM engine ignores unknown fields.
         """
         result = []
         for msg in messages:
@@ -1613,7 +1624,7 @@ class OllamaClient:
 
     @staticmethod
     def _native_to_openai_response(data):
-        """Convert Ollama native /api/chat response to OpenAI-compatible format.
+        """Convert LLM engine native /api/chat response to OpenAI-compatible format.
 
         This adapter lets all downstream consumers (show_sync_response, chat_sync,
         token reconciliation) work without changes.
@@ -1650,13 +1661,13 @@ class OllamaClient:
         """Send chat request via LLM engine API.
 
         LM Studio: Uses OpenAI-compatible /v1/chat/completions endpoint.
-        Ollama: Uses native /api/chat endpoint for better options support.
+        LLM engine (Ollama): Uses native /api/chat endpoint for better options support.
         Returns OpenAI-compatible format.
         """
         if self.llm_engine == "lmstudio":
             return self._chat_openai(model, messages, tools, stream)
 
-        # Ollama native API
+        # LLM engine native API
         temp = self.temperature
         if tools:
             # Lower temperature for tool-calling (improves JSON reliability)
@@ -1705,12 +1716,15 @@ class OllamaClient:
             finally:
                 e.close()
             if e.code == 404:
-                raise RuntimeError(f"Model '{model}' not found. Run: ollama pull {model}") from e
+                if self.llm_engine == "lmstudio":
+                    raise RuntimeError(f"Model '{model}' not found. Please download it in LM Studio GUI.") from e
+                else:
+                    raise RuntimeError(f"Model '{model}' not found. Run: ollama pull {model}") from e
             elif e.code == 400:
                 if "tool" in error_body.lower() or "function" in error_body.lower():
                     raise RuntimeError(
                         f"Model '{model}' does not support tool/function calling. "
-                        f"Try: qwen3:8b, llama3.1:8b. Error: {error_body[:200]}"
+                        f"Try: qwen3.5-9b, qwen3:8b, llama3.1:8b. Error: {error_body[:200]}"
                     ) from e
                 elif "context" in error_body.lower() or "token" in error_body.lower():
                     raise RuntimeError(
@@ -1718,9 +1732,9 @@ class OllamaClient:
                         f"Use /compact or /clear. Error: {error_body[:200]}"
                     ) from e
                 else:
-                    raise RuntimeError(f"Bad request to Ollama (400): {error_body}") from e
+                    raise RuntimeError(f"Bad request to LLM engine (400): {error_body}") from e
             else:
-                raise RuntimeError(f"Ollama HTTP error {e.code}: {error_body}") from e
+                raise RuntimeError(f"LLM engine HTTP error {e.code}: {error_body}") from e
 
         if stream:
             return self._iter_ndjson(resp)
@@ -1732,7 +1746,7 @@ class OllamaClient:
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError as e:
-                raise RuntimeError(f"Invalid JSON from Ollama: {raw[:200]}") from e
+                raise RuntimeError(f"Invalid JSON from LLM engine: {raw[:200]}") from e
             openai_resp = self._native_to_openai_response(data)
             if self.debug:
                 usage = openai_resp.get("usage", {})
@@ -1856,7 +1870,7 @@ class OllamaClient:
             resp.close()
 
     def _iter_ndjson(self, resp):
-        """Iterate over NDJSON stream from Ollama native /api/chat.
+        """Iterate over NDJSON stream from LLM engine native /api/chat.
 
         Each line is a complete JSON object.  Yields chunks converted to
         OpenAI delta format so stream_response() works without changes.
@@ -1935,7 +1949,7 @@ class OllamaClient:
                 pass
 
     def tokenize(self, model, text):
-        """Count tokens via Ollama /api/tokenize. Falls back to len//4."""
+        """Count tokens via LLM engine /api/tokenize. Falls back to len//4."""
         try:
             body = json.dumps({"model": model, "text": text}).encode("utf-8")
             req = urllib.request.Request(
@@ -2004,7 +2018,7 @@ class OllamaClient:
 # ════════════════════════════════════════════════════════════════════════════════
 
 class RAGEngine:
-    """Local RAG engine using Ollama embeddings + SQLite vector store."""
+    """Local RAG engine using LLM engine embeddings + SQLite vector store."""
 
     # File extensions to index
     TEXT_EXTENSIONS = {
@@ -2053,7 +2067,7 @@ class RAGEngine:
     # ── Embedding ─────────────────────────────────────────────────────────────
 
     def _get_embedding(self, text):
-        """Get embedding vector from Ollama. Tries /api/embed first, falls back to /api/embeddings."""
+        """Get embedding vector from LLM engine. Tries /api/embed first, falls back to /api/embeddings."""
         model = self.config.rag_model
         host = self.config.ollama_host.rstrip("/")
 
@@ -5390,7 +5404,7 @@ class Session:
         self.config = config
         self.system_prompt = system_prompt
         self.messages = []
-        self._client = None  # OllamaClient for sidecar summarization
+        self._client = None  # LLMClient for sidecar summarization
         raw_id = config.session_id or (
             datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
         )
@@ -5403,7 +5417,7 @@ class Session:
         self._just_compacted = False  # skip token reconciliation right after compaction
 
     def set_client(self, client):
-        """Set OllamaClient reference for sidecar model summarization."""
+        """Set LLMClient reference for sidecar model summarization."""
         self._client = client
 
     @staticmethod
@@ -6961,7 +6975,7 @@ class Agent:
                         self.session.add_system_note(fw_msg)
                         _p(f"\n  {_ansi(chr(27)+'[38;5;226m')}👁 {len(fw_changes)} file change(s) detected{C.RESET}")
 
-                # 1. Call Ollama (with retry for malformed responses)
+                # 1. Call LLM engine (with retry for malformed responses)
                 tools = self.registry.get_schemas()
                 # In plan mode, only allow read-only tools
                 if self._plan_mode:
@@ -7000,7 +7014,7 @@ class Agent:
 
                 if response is None:
                     _p(f"\n{C.RED}The AI didn't respond. It may still be loading or ran out of memory.{C.RESET}")
-                    _p(f"{C.DIM}Try again, or restart Ollama if this keeps happening.{C.RESET}")
+                    _p(f"{C.DIM}Try again, or restart LLM engine if this keeps happening.{C.RESET}")
                     break
 
                 # 2. Parse response
@@ -7314,7 +7328,10 @@ class Agent:
                 _p(f"\n{C.RED}HTTP {e.code} {e.reason}: {body}{C.RESET}")
                 if e.code == 404:
                     _p(f"{C.DIM}The model '{self.config.model}' may not be downloaded yet.{C.RESET}")
-                    _p(f"{C.DIM}Download it:  ollama pull {self.config.model}{C.RESET}")
+                    if self.config.llm_engine == "lmstudio":
+                        _p(f"{C.DIM}Download it in LM Studio GUI.{C.RESET}")
+                    else:
+                        _p(f"{C.DIM}Download it:  ollama pull {self.config.model}{C.RESET}")
                 elif e.code == 400:
                     _p(f"{C.DIM}The request was rejected — the model name or context may be invalid.{C.RESET}")
                 break
@@ -7324,8 +7341,12 @@ class Agent:
                     response.close()
                 if text:
                     self.session.add_assistant_message(text)
-                _p(f"\n{C.RED}Lost connection to Ollama (the local AI engine).{C.RESET}")
-                _p(f"{C.DIM}It may have crashed or been closed. Restart it:  ollama serve{C.RESET}")
+                if self.config.llm_engine == "lmstudio":
+                    _p(f"\n{C.RED}Lost connection to LM Studio (the local AI engine).{C.RESET}")
+                    _p(f"{C.DIM}It may have crashed or been closed. Restart LM Studio.{C.RESET}")
+                else:
+                    _p(f"\n{C.RED}Lost connection to Ollama (the local AI engine).{C.RESET}")
+                    _p(f"{C.DIM}It may have crashed or been closed. Restart it:  ollama serve{C.RESET}")
                 _p(f"{C.DIM}Your conversation is still here — just try again after restarting.{C.RESET}")
                 break
             except Exception as e:
@@ -7492,7 +7513,10 @@ def main():
     if config.rag_index:
         print(f"\n{C.CYAN}RAG Indexing: {config.rag_index}{C.RESET}")
         print(f"{C.DIM}Embedding model: {config.rag_model}{C.RESET}")
-        print(f"{C.DIM}Ollama: {config.ollama_host}{C.RESET}\n")
+        if config.llm_engine == "lmstudio":
+            print(f"{C.DIM}LM Studio: {config.ollama_host}{C.RESET}\n")
+        else:
+            print(f"{C.DIM}Ollama: {config.ollama_host}{C.RESET}\n")
         try:
             rag = RAGEngine(config)
             rag.index_path(config.rag_index)
@@ -7509,7 +7533,7 @@ def main():
         tui.banner(config)  # skip banner in one-shot mode (-p)
 
     # Check LM Studio connection
-    client = OllamaClient(config)
+    client = LLMClient(config)
     ok, models = client.check_connection()
 
     if not ok:
@@ -7791,7 +7815,10 @@ def main():
                             print(f"{C.YELLOW}Model '{new_model}' is not downloaded yet.{C.RESET}")
                             if avail:
                                 _show_model_list(avail)
-                            print(f"{C.DIM}Download it:  ollama pull {new_model}{C.RESET}")
+                            if config.llm_engine == "lmstudio":
+                                print(f"{C.DIM}Download it in LM Studio GUI.{C.RESET}")
+                            else:
+                                print(f"{C.DIM}Download it:  ollama pull {new_model}{C.RESET}")
                     else:
                         _ok, fresh_models = client.check_connection()
                         avail = fresh_models if _ok else []
@@ -7804,7 +7831,10 @@ def main():
                         if avail:
                             print(f"\n  {C.BOLD}Installed models:{C.RESET}")
                             _show_model_list(avail)
-                        print(f"\n  {C.DIM}Switch: /model <name>  |  Download: ollama pull <name>{C.RESET}")
+                        if config.llm_engine == "lmstudio":
+                            print(f"\n  {C.DIM}Switch: /model <name>  |  Download in LM Studio GUI{C.RESET}")
+                        else:
+                            print(f"\n  {C.DIM}Switch: /model <name>  |  Download: ollama pull <name>{C.RESET}")
                         _tier_legend = (f"  {C.DIM}Tiers: "
                                         f"{_ansi(chr(27)+'[38;5;196m')}S{C.RESET}{C.DIM}=Frontier "
                                         f"{_ansi(chr(27)+'[38;5;208m')}A{C.RESET}{C.DIM}=Expert "
@@ -8215,7 +8245,8 @@ def main():
                     print(f"\n  {_c51x}━━ Configuration ━━━━━━━━━━━━━━━━━━{C.RESET}")
                     print(f"  {_c87x}Model{C.RESET}         {config.model}")
                     print(f"  {_c87x}Sidecar{C.RESET}       {config.sidecar_model or '(none)'}")
-                    print(f"  {_c87x}Host{C.RESET}          {config.ollama_host}")
+                    engine_name = config.llm_engine.title() if config.llm_engine == "lmstudio" else config.llm_engine
+                    print(f"  {_c87x}Host{C.RESET}          {config.ollama_host} ({engine_name})")
                     print(f"  {_c87x}Temperature{C.RESET}   {config.temperature}")
                     print(f"  {_c87x}Max tokens{C.RESET}    {config.max_tokens}")
                     print(f"  {_c87x}Context{C.RESET}       {config.context_window}")

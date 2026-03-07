@@ -332,6 +332,7 @@ try {
     }
     Write-Host "============================================"
     Write-Host ""
+    $env:VIBE_LOCAL_ENGINE = $LLMEngine
     $env:VIBE_LOCAL_MODEL = $CfgModel
     $env:VIBE_LOCAL_SIDECAR_MODEL = if ($SidecarModel) { $SidecarModel } else { "" }
     $env:VIBE_LOCAL_DEBUG = "$VibeLocalDebug"
