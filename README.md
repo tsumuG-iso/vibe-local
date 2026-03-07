@@ -38,12 +38,12 @@ Built for offline workshops where instructors support learners with AI agents, f
 ### これは何？
 
 MacやWindows、LinuxにコマンドをコピペするだけでAIがコードを書いてくれる環境。
-ネットワーク不要・完全無料。**Python + Ollama だけで動く**完全OSSのコーディングエージェント。
+ネットワーク不要・完全無料。**Python + LM Studio だけで動く**完全OSSのコーディングエージェント。
 
 **エージェントのコア `vibe-coder.py` は Python 標準ライブラリだけで書かれた単一ファイルです。** pip install 不要、外部パッケージ依存ゼロ。ソースコードはそのまま読めるため、AIコーディングエージェントの仕組みを学ぶ教材としても、研究のベースラインとしても使えます。すべてがオープンソース (MIT) で公開されています。
 
 ```
-vibe-local → vibe-coder.py (OSS, Python stdlib only, ~7400行) → Ollama / LM Studio (直接通信)
+vibe-local → vibe-coder.py (OSS, Python stdlib only, ~7400行) → LM Studio (直接通信)
 ```
 
 ログイン不要・Node.js不要・プロキシプロセス不要。16個の内蔵ツール、サブエージェント、並列エージェント、ファイル監視、画像・PDF読み取り対応。MCP連携・スキルシステム・Plan/Actモード・Gitチェックポイント・自動テスト・固定フッター(DECSTBM)搭載。787テスト。
@@ -84,14 +84,13 @@ vibe-local -p "Pythonでじゃんけんゲーム作って"
 # モデルを手動指定
 vibe-local --model qwen3:8b
 
-# LLMエンジンを指定
-vibe-local --engine lmstudio
-
 # ヘルプを表示
 vibe-local --help
 ```
 
-### LM Studioを使う場合
+### LM Studioの初期設定
+
+vibe-localはLM Studioをデフォルトで使用します。初回使用時に以下を設定してください：
 
 **1. LM Studioをインストール**
 https://lmstudio.ai/ からダウンロードしてインストール
@@ -101,59 +100,7 @@ https://lmstudio.ai/ からダウンロードしてインストール
 - 左サイドバーの Settings → API Server を有効化
 - Portが `1234` であることを確認（デフォルト）
 
-**3. LLMエンジンをLM Studioに設定**
-
-各環境で以下のコマンドを実行:
-
-*macOS / Linux / WSL (bash/zsh):*
-```bash
-mkdir -p ~/.config/vibe-local
-cat > ~/.config/vibe-local/config << 'EOF'
-LLM_ENGINE=lmstudio
-EOF
-```
-
-*Windows (PowerShell):*
-```powershell
-$env:USERPROFILE = [System.Environment]::GetFolderPath("UserProfile")
-$configDir = "$env:USERPROFILE\.config\vibe-local"
-if (-not (Test-Path $configDir)) {
-    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-}
-Set-Content -Path "$configDir\config" -Value "LLM_ENGINE=lmstudio"
-```
-
-*Windows (CMD):*
-```cmd
-mkdir "%USERPROFILE%\.config\vibe-local" 2>nul
-echo LLM_ENGINE=lmstudio > "%USERPROFILE%\.config\vibe-local\config"
-```
-
-**コマンドラインオプションを使用:**
-```bash
-# macOS / Linux / WSL
-vibe-local --engine lmstudio
-
-# Windows (PowerShell)
-.\vibe-local.ps1 --engine lmstudio
-
-# Windows (CMD)
-vibe-local.cmd --engine lmstudio
-```
-
-**環境変数を使用:**
-```bash
-# macOS / Linux / WSL
-VIBE_LOCAL_ENGINE=lmstudio vibe-local
-
-# Windows (PowerShell)
-$env:VIBE_LOCAL_ENGINE="lmstudio"; .\vibe-local.ps1
-
-# Windows (CMD)
-set VIBE_LOCAL_ENGINE=lmstudio && vibe-local.cmd
-```
-
-**4. 起動**
+**3. 起動**
 ```bash
 vibe-local
 ```
@@ -162,40 +109,20 @@ vibe-local
 
 vibe-localを削除するには以下を実行します:
 
-> **どれの場所からでも実行できます:**
-> - インストールされたバイナリがある場所（`~/.local/bin/` や `%USERPROFILE%\.local\bin\`）
-> - クローンディレクトリ（`~/vibe-local` や `vibe-local/`）
-> - どちらから実行しても、すべてのファイルが削除されます
+> **クローンディレクトリは不要です。どこからでも実行できます。**
 
-*macOS / Linux / WSL:*
 ```bash
-# クローンディレクトリから実行（推奨）
-cd ~/vibe-local
-chmod +x uninstall.sh
-./uninstall.sh
+# 確認あり
+vibe-local uninstall
 
-# または、どこからでも実行可能
-./uninstall.sh
+# 確認なし（即時削除）
+vibe-local uninstall -y
 ```
 
-*Windows (PowerShell):*
-```powershell
-# クローンディレクトリから実行（推奨）
-cd vibe-local
-.\uninstall.ps1
-
-# または、どこからでも実行可能
-.\uninstall.ps1
-```
-
-*Windows (CMD):*
-```cmd
-# クローンディレクトリから実行（推奨）
-cd vibe-local
-powershell -ExecutionPolicy Bypass -File uninstall.ps1
-
-# または、どこからでも実行可能
-powershell -ExecutionPolicy Bypass -File uninstall.ps1
+**別名コマンド（インストール済み環境）**
+```bash
+vibe-local-uninstall
+vibe-local-uninstall -y
 ```
 
 **手動で削除する場合:**
@@ -206,15 +133,19 @@ rm -rf ~/.local/state/vibe-local
 rm -rf ~/.local/lib/vibe-local
 rm -f ~/.local/bin/vibe-local
 rm -f ~/.local/bin/vibe-coder
+rm -f ~/.local/bin/vibe-local-uninstall
 
 # Windows (PowerShell)
+Remove-Item -Path "$env:USERPROFILE\.config\vibe-local" -Recurse -Force
 Remove-Item -Path "$env:LOCALAPPDATA\vibe-local" -Recurse -Force
+Remove-Item -Path "$env:USERPROFILE\.local\lib\vibe-local" -Recurse -Force
 Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local.cmd" -Force
 Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local.ps1" -Force
+Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local-uninstall.cmd" -Force
+Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local-uninstall.ps1" -Force
 ```
 
-> **注:** OllamaやLM Studioは削除されません。これらを削除する場合は別途行ってください。
-> **クローンディレクトリから実行した場合:** スクリプトは自動的に親ディレクトリに移動して、クローンディレクトリも削除します。
+> **注:** LM Studioは削除されません。これらを削除する場合は別途行ってください。
 
 ### 対応環境
 
@@ -236,23 +167,12 @@ Remove-Item -Path "$env:USERPROFILE\.local\bin\vibe-local.ps1" -Force
 <details>
 <summary>よくある問題と解決法</summary>
 
-**"ollama が起動できませんでした"**
-```bash
-open -a Ollama        # macOS
-ollama serve          # Linux / Windows
-```
-
 **"LM Studio API Serverが起動していません"**
 - LM Studioアプリを起動
 - Settings → API Server を有効化
 - Portが `1234` であることを確認
 
-**"モデルが見つかりません"** (Ollamaの場合)
-```bash
-ollama pull qwen3:8b
-```
-
-**"モデルが見つかりません"** (LM Studioの場合)
+**"モデルが見つかりません"**
 - LM Studioでモデルがロードされているか確認
 - モデル名が正しいか確認
 
@@ -389,12 +309,12 @@ AIは かんぺきでは ありません。まちがった コマンドを う�
 ### What is this?
 
 A free AI coding environment you can set up with a single command on your Mac, Windows, or Linux.
-No network required. Completely free. **Python + Ollama only** — a fully open-source coding agent.
+No network required. Completely free. **Python + LM Studio only** — a fully open-source coding agent.
 
 **The core agent `vibe-coder.py` is a single file written entirely with the Python standard library.** No pip install needed. Zero external dependencies. The source code is human-readable as-is, making it ideal as teaching material for understanding how AI coding agents work, or as a research baseline. Everything is open source (MIT).
 
 ```
-vibe-local → vibe-coder.py (OSS, Python stdlib only, ~7400 lines) → Ollama (direct)
+vibe-local → vibe-coder.py (OSS, Python stdlib only, ~7400 lines) → LM Studio (direct)
 ```
 
 No login. No Node.js. No proxy process. 16 built-in tools, sub-agents, parallel agents, file watcher, image/PDF reading. MCP integration, Skills system, Plan/Act mode, Git checkpoints, auto-test loop, fixed footer (DECSTBM). 787 tests.
@@ -454,16 +374,14 @@ vibe-local --model qwen3:8b
 <details>
 <summary>Common issues and solutions</summary>
 
-**"ollama failed to start"**
-```bash
-open -a Ollama        # macOS
-ollama serve          # Linux / Windows
-```
+**"LM Studio API Server is not running"**
+- Open LM Studio application
+- Enable Settings → API Server
+- Check that Port is `1234` (default)
 
 **"model not found"**
-```bash
-ollama pull qwen3:8b
-```
+- Check if model is loaded in LM Studio
+- Verify model name is correct
 
 **"vibe-coder.py not found"**
 ```bash
@@ -510,12 +428,12 @@ VIBE_DEBUG_TUI=1 vibe-local
 ### 这是什么？
 
 在Mac、Windows 或 Linux上只需复制粘贴一个命令，AI就能帮你写代码。
-无需网络，完全免费。**Python + Ollama** 打造的完全开源编程代理。
+无需网络，完全免费。**Python + LM Studio** 打造的完全开源编程代理。
 
 **核心代理 `vibe-coder.py` 是仅使用 Python 标准库编写的单一文件。** 无需 pip install，零外部依赖。源代码直接可读，非常适合作为学习AI编程代理工作原理的教材或研究基线。一切以开源 (MIT) 形式公开。
 
 ```
-vibe-local → vibe-coder.py (开源, 纯Python标准库, ~7400行) → Ollama (直接通信)
+vibe-local → vibe-coder.py (开源, 纯Python标准库, ~7400行) → LM Studio (直接通信)
 ```
 
 无需登录、无需Node.js、无需代理进程。16个内置工具、子代理、并行代理、文件监视、图像/PDF读取支持。MCP集成、技能系统、Plan/Act模式、Git检查点、自动测试循环、固定页脚(DECSTBM)。787项测试。
@@ -575,16 +493,14 @@ vibe-local --model qwen3:8b
 <details>
 <summary>常见问题及解决方法</summary>
 
-**"ollama 无法启动"**
-```bash
-open -a Ollama        # macOS
-ollama serve          # Linux / Windows
-```
+**"LM Studio API Server 未运行"**
+- 打开LM Studio应用程序
+- 启用 Settings → API Server
+- 检查 Port 是否为 `1234`（默认）
 
 **"未找到模型"**
-```bash
-ollama pull qwen3:8b
-```
+- 检查LM Studio中是否加载了模型
+- 验证模型名称是否正确
 
 **"vibe-coder.py 未找到"**
 ```bash
@@ -632,7 +548,7 @@ VIBE_DEBUG_TUI=1 vibe-local
 ┌────────────────────────────────────────────────────────────┐
 │  User                                                      │
 │  └── vibe-local.sh / vibe-local.ps1 (launch script)       │
-│       ├── Ensure Ollama is running                         │
+│       ├── Ensure LM Studio is running                       │
 │       └── Launch vibe-coder.py (direct, no proxy)          │
 └────────────────────────┬───────────────────────────────────┘
                          │
@@ -679,13 +595,13 @@ VIBE_DEBUG_TUI=1 vibe-local
 │  │  Permission Manager (safe / ask / deny tiers)        │  │
 │  │  Session Persistence (JSONL) + Context Compaction    │  │
 │  │  TUI (readline, ANSI colors, markdown rendering)     │  │
-│  │  Multimodal (image base64 → Ollama vision models)    │  │
+│  │  Multimodal (image base64 → vision対応モデル)           │  │
 │  └──────────────────────┬───────────────────────────────┘  │
 └─────────────────────────┼──────────────────────────────────┘
                           │  OpenAI Chat API (/v1/chat/completions)
                           ▼
 ┌────────────────────────────────────────────────────────────┐
-│  Ollama (localhost:11434)                                   │
+│  LM Studio (localhost:1234)                                │
 │  Local LLM inference runtime                                │
 │  qwen3-coder:30b / qwen3:8b / qwen3:1.7b / ...            │
 └────────────────────────────────────────────────────────────┘
@@ -703,7 +619,7 @@ There are many excellent open-source projects in the AI coding agent space. Each
 |---|---|---|---|---|---|---|---|
 | Language | Python | Go | TypeScript | Rust | TypeScript | Rust + TS | Python (stdlib only) |
 | External deps | ~100+ pip pkgs | Go modules | VS Code + npm | Node.js | Node.js | Cargo crates | **0** |
-| Local LLM | Yes (many backends) | Yes (config) | Yes (providers) | No | No | Yes | Yes (Ollama native) |
+| Local LLM | Yes (many backends) | Yes (config) | Yes (providers) | No | No | Yes | Yes (LM Studio native) |
 | API key required | Yes (or local) | Yes (or local) | Yes (or local) | Yes (OpenAI) | Yes (Google) | Yes (or local) | **No** |
 | Install | `pip install` | `go install` / brew | VS Code marketplace | `npm install` | `npm install` | Binary / installer | `curl \| bash` |
 | Interface | Terminal | Terminal (rich TUI) | VS Code | Terminal | Terminal | Terminal + Desktop | Terminal |
@@ -723,7 +639,7 @@ There are many excellent open-source projects in the AI coding agent space. Each
 - **Zero setup friction / セットアップの摩擦ゼロ** — `curl | bash` で全て完了。pip install も npm も venv も不要。学生はコマンド1つでAIコーディングを開始できます。
 - **Single file, readable source / 1ファイル、読めるソース** — `vibe-coder.py` は外部依存ゼロの単一ファイル。AIエージェント、ツール使用、プロンプトエンジニアリングの授業教材として最適です。
 - **Fully offline / 完全オフライン** — インターネットのない教室、飛行機、地方でも動作。モデルを事前DLしてUSBで配布可能。
-- **Pure Python stdlib / 純粋なPython標準ライブラリ** — C拡張なし、コンパイル済みバイナリなし、仮想環境不要。Python 3.8+ と Ollama があれば動きます。
+- **Pure Python stdlib / 純粋なPython標準ライブラリ** — C拡張なし、コンパイル済みバイナリなし、仮想環境不要。Python 3.8+ と LM Studio があれば動きます。
 - **Research-friendly / 研究しやすい** — 単一ファイル設計により、エージェント行動、ツール使用パターン、LLM性能の実験・計測・改変が容易です。
 
 > If you're a professional developer looking for the best coding assistant, check out [aider](https://github.com/Aider-AI/aider), [opencode](https://github.com/opencode-ai/opencode), [Cline](https://github.com/cline/cline), or [Goose](https://github.com/block/goose) — they are all excellent tools built by talented communities. If you're an educator, researcher, or student who wants to understand how AI coding agents work from the inside, or need something that runs offline with zero dependencies, vibe-local is for you.
@@ -739,13 +655,13 @@ There are many excellent open-source projects in the AI coding agent space. Each
 | Flag | Short | Description | 説明 | 说明 |
 |------|-------|-------------|------|------|
 | `--prompt` | `-p` | One-shot prompt (non-interactive) | ワンショットプロンプト | 单次提示 |
-| `--model` | `-m` | Specify Ollama model name | Ollamaモデル名を指定 | 指定Ollama模型 |
+| `--model` | `-m` | Specify LM Studio model name | LM Studioモデル名を指定 | 指定LM Studio模型 |
 | `--yes` | `-y` | Auto-approve all tool calls | 全ツール自動許可 | 自动批准所有工具 |
 | `--debug` | | Enable debug logging | デバッグログ有効化 | 启用调试日志 |
 | `--resume` | | Resume last session | 最後のセッション再開 | 恢复上一个会话 |
 | `--session-id <id>` | | Resume specific session | 指定セッション再開 | 恢复特定会话 |
 | `--list-sessions` | | List saved sessions | セッション一覧 | 列出会话 |
-| `--ollama-host <url>` | | Ollama API endpoint | Ollamaエンドポイント | Ollama API端点 |
+| `--llm-host <url>` | | LLM API endpoint | LLMエンドポイント | LLM API端点 |
 | `--max-tokens <n>` | | Max output tokens (default: 8192) | 最大出力トークン数 | 最大输出令牌数 |
 | `--temperature <f>` | | Sampling temperature (default: 0.7) | サンプリング温度 | 采样温度 |
 | `--context-window <n>` | | Context window size (default: 32768) | コンテキストウィンドウ | 上下文窗口 |
@@ -800,7 +716,7 @@ Format: `KEY="value"`. Lines starting with `#` are comments.
 |-----|---------|-------------|
 | `MODEL` | auto (by RAM) | Main model name |
 | `SIDECAR_MODEL` | auto (by RAM) | Sidecar model (lighter, for compaction etc.) |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+| `LLM_HOST` | `http://localhost:1234` | LLM API endpoint |
 | `MAX_TOKENS` | `8192` | Max output tokens per response |
 | `TEMPERATURE` | `0.7` | Sampling temperature |
 | `CONTEXT_WINDOW` | `32768` | Context window size in tokens |
@@ -810,12 +726,12 @@ Example:
 # ~/.config/vibe-local/config
 MODEL="qwen3:8b"
 SIDECAR_MODEL="qwen3:1.7b"
-OLLAMA_HOST="http://localhost:11434"
+LLM_HOST="http://localhost:1234"
 ```
 
 ### Model Tiers
 
-vibe-local auto-detects installed Ollama models and picks the best one for your RAM. Use `/models` to see tiers.
+vibe-local auto-detects installed LM Studio models and picks the best one for your RAM. Use `/models` to see tiers.
 
 | Tier | RAM (practical) | Models | Quality | Speed |
 |------|-----------------|--------|---------|-------|
@@ -868,7 +784,7 @@ Priority: CLI flags > Environment variables > Config file > Defaults
 
 | Variable | Description |
 |----------|-------------|
-| `OLLAMA_HOST` | Ollama API endpoint |
+| `LLM_HOST` | LLM API endpoint |
 | `VIBE_CODER_MODEL` | Override main model (highest priority) |
 | `VIBE_LOCAL_MODEL` | Main model (set by launcher) |
 | `VIBE_CODER_SIDECAR` | Override sidecar model |
@@ -968,13 +884,13 @@ Run multiple sub-agents concurrently for faster multi-task execution:
 
 ### Streaming Enhancement / ストリーミング強化
 
-Infrastructure for streaming tool call responses from Ollama:
+Infrastructure for streaming tool call responses from LLM:
 
 - TUI accumulates tool_call deltas from SSE stream chunks
-- `_supports_tool_streaming` flag for Ollama version detection
+- `_supports_tool_streaming` flag for LLM version detection
 - Falls back to sync mode when tool streaming is not supported
 
-ツールコール応答のストリーミング基盤。Ollamaバージョンに応じて自動切替。
+ツールコール応答のストリーミング基盤。LLMバージョンに応じて自動切替。
 
 ---
 
@@ -1049,7 +965,7 @@ vibe-local offers normal mode (confirms each action) and auto-approve mode (`-y`
 | Mechanism | Description |
 |-----------|-------------|
 | **SAFE_TOOLS vs ASK_TOOLS** | Read/Glob/Grep/SubAgent/TaskTools are auto-approved. Bash/Write/Edit require confirmation. WebFetch/WebSearch need extra context. |
-| **SSRF prevention** | OLLAMA_HOST restricted to localhost only |
+| **SSRF prevention** | LLM_HOST restricted to localhost only |
 | **URL scheme validation** | Only http:// and https:// allowed |
 | **Session ID sanitization** | Path traversal prevention |
 | **Max iteration limit** | Agent loop stops after 50 iterations |
@@ -1068,8 +984,8 @@ vibe-local offers normal mode (confirms each action) and auto-approve mode (`-y`
 curl -fsSL https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support/install.sh | bash
 
 # 2. Pre-download models (for offline use)
-ollama pull qwen3:8b          # For 16GB machines
-ollama pull qwen3-coder:30b   # For 32GB machines (recommended)
+# LM Studioでモデルをダウンロードしてください（GUI操作）
+# 推奨モデル: qwen3-coder:30b, qwen3:8b
 
 # 3. Verify
 vibe-local -p "Write Hello World in Python"
@@ -1114,14 +1030,13 @@ vibe-local -p "Write Hello World in Python"
 
 **What this tool does:**
 - Runs `vibe-coder.py`, a fully open-source Python coding agent
-- Communicates directly with Ollama (open-source LLM runtime) running locally
+- Communicates directly with LM Studio (ローカルLLM実行環境) running locally
 - Optionally connects to MCP servers (local processes, user-configured)
 - No communication with external servers (Web search/fetch are optional)
 - Does not use any Anthropic software
 
 **Licenses:**
 - **vibe-coder.py**: MIT License
-- **Ollama**: MIT License
 - **Qwen3 models**: Apache 2.0 License
 - **vibe-local**: MIT License
 
@@ -1135,7 +1050,7 @@ All components are open-source. This tool is intended for research and education
 > "Claude" is a trademark of Anthropic, PBC. This is an unofficial community tool.
 >
 > Since v0.3.0, this tool does not use any proprietary software.
-> All components (vibe-coder.py, Ollama, Qwen3 models) are open-source licensed.
+> All components (vibe-coder.py, LM Studio, Qwen3 models) are open-source licensed.
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 > The authors are not liable for any damages arising from the use of this software.
