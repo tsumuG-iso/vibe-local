@@ -17,6 +17,11 @@ param(
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"  # Speed up Invoke-WebRequest
 
+# --- Engine parameter handling ---
+if ($Engine) {
+    $LLMEngine = $Engine.ToLower()
+}
+
 # --- UTF-8 encoding fix (PowerShell 文字化け対策) ---
 # Force UTF-8 for console output (Japanese/CJK characters)
 try {
@@ -517,7 +522,7 @@ if (-not $PythonCmd) {
 
 # --- 設定ファイル読み込み ---
 $ConfigFile = "$env:LOCALAPPDATA\vibe-local\config"
-$LLMEngine = "ollama"  # デフォルト
+$LLMEngine = "lmstudio"  # デフォルト
 if (Test-Path $ConfigFile) {
     try {
         $configContent = Get-Content $ConfigFile -Raw -ErrorAction Stop
@@ -528,8 +533,9 @@ if (Test-Path $ConfigFile) {
 }
 
 # --- Ollama (LM Studioの場合はスキップ) ---
-# Check PATH first, then common install locations (GUI installer doesn't always add to PATH)
-$ollamaFound = Get-Command ollama -ErrorAction SilentlyContinue
+if ($LLMEngine -ne "lmstudio") {
+    # Check PATH first, then common install locations (GUI installer doesn't always add to PATH)
+    $ollamaFound = Get-Command ollama -ErrorAction SilentlyContinue
 if (-not $ollamaFound) {
     $ollamaSearchPaths = @(
         "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe",
@@ -613,6 +619,9 @@ if ($ollamaFound) {
         Write-Host ""
     }
 }
+} else {
+    Vapor-Info "Engine: LM Studio - skipping Ollama installation"
+}
 
 # --- Claude Code CLI (optional, for --auto mode fallback) ---
 if (Get-Command claude -ErrorAction SilentlyContinue) {
@@ -635,7 +644,31 @@ try {
     }
 } catch { }
 
-# Ensure Ollama is running
+# LM Studioの場合はGUIでモデルダウンロードを案内
+if ($LLMEngine -eq "lmstudio") {
+    Write-Host ""
+    Write-Host "  ${PINK}##${MAGENTA}##${PURPLE}##${CYAN}##${AQUA}##${MINT}##${NEON_GREEN}##${YELLOW}##${ORANGE}##${CORAL}##${HOT_PINK}##${NC}"
+    Write-Host "  ${BOLD}${MAGENTA}  >>  LM Studio モデルセットアップ ${NC}"
+    Write-Host "  ${PINK}##${MAGENTA}##${PURPLE}##${CYAN}##${AQUA}##${MINT}##${NEON_GREEN}##${YELLOW}##${ORANGE}##${CORAL}##${HOT_PINK}##${NC}"
+    Write-Host ""
+    Write-Host "  ${CYAN}|${NC} ${BOLD}${WHITE}LM Studioで以下のモデルをダウンロードしてください:${NC}"
+    Write-Host "  ${CYAN}|${NC}"
+    Write-Host "  ${CYAN}|${NC}   推奨モデル: ${BOLD}${YELLOW}$SelectedModel${NC}"
+    if ($SidecarModel -and $SidecarModel -ne $SelectedModel) {
+        Write-Host "  ${CYAN}|${NC}   サイドカー:  ${BOLD}${AQUA}$SidecarModel${NC}"
+    }
+    Write-Host "  ${CYAN}|${NC}"
+    Write-Host "  ${CYAN}|${NC}   手順:"
+    Write-Host "  ${CYAN}|${NC}     1. LM Studioを開く"
+    Write-Host "  ${CYAN}|${NC}     2. 左メニューの「Discover」または「Models」をクリック"
+    Write-Host "  ${CYAN}|${NC}     3. 検索ボックスでモデル名を検索"
+    Write-Host "  ${CYAN}|${NC}     4. モデルを選択して「Download」をクリック"
+    Write-Host "  ${CYAN}|${NC}"
+    Write-Host "  ${PINK}##${MAGENTA}##${PURPLE}##${CYAN}##${AQUA}##${MINT}##${NEON_GREEN}##${YELLOW}##${ORANGE}##${CORAL}##${HOT_PINK}##${NC}"
+    Write-Host ""
+    Vapor-Info "モデルのダウンロードが完了したら続行してください"
+} else {
+    # Ensure Ollama is running
 $ollamaRunning = $false
 try {
     # PS 5.1 needs ~2s for first .NET HTTP call; use 5s timeout to avoid false negatives
@@ -749,6 +782,7 @@ if ($SidecarModel -and $SidecarModel -ne $SelectedModel) {
         Vapor-Warn "Sidecar model download failed (non-critical): $SidecarModel"
     }
 }
+}
 
 # =============================================
 # Step 5: File deployment
@@ -830,15 +864,30 @@ Vaporwave-Progress (msg 'config_gen') 1000
 if (Test-Path $ConfigFile) {
     Vapor-Warn (msg 'config_exists')
 } else {
-    $configContent = @"
+    if ($LLMEngine -eq "lmstudio") {
+        $configContent = @"
+# vibe-local config
+# Auto-generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+# Engine: vibe-coder (direct LM Studio, no proxy needed)
+
+MODEL="$SelectedModel"
+SIDECAR_MODEL="$SidecarModel"
+LLM_ENGINE="lmstudio"
+LLM_HOST="http://localhost:1234"
+"@
+    } else {
+        $configContent = @"
 # vibe-local config
 # Auto-generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 # Engine: vibe-coder (direct Ollama, no proxy needed)
 
 MODEL="$SelectedModel"
 SIDECAR_MODEL="$SidecarModel"
+LLM_ENGINE="ollama"
 OLLAMA_HOST="http://localhost:11434"
+LLM_HOST="http://localhost:11434"
 "@
+    }
     Set-Content -Path $ConfigFile -Value $configContent -Encoding UTF8
     Vapor-Success "$(msg 'config_file'): $ConfigFile"
 }
@@ -862,12 +911,21 @@ Write-Host ""
 Write-Host "  ${CYAN}|${NC} ${BOLD}${WHITE}$(msg 'diag')${NC}"
 Write-Host ""
 
-# Ollama
-try {
-    $resp = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-    Vapor-Success "Ollama Server       -> $(msg 'online')"
-} catch {
-    Vapor-Warn "Ollama Server       -> $(msg 'standby')"
+# LLM Server (LM Studio / Ollama)
+if ($LLMEngine -eq "lmstudio") {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://localhost:1234/v1/models" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+        Vapor-Success "LM Studio Server    -> $(msg 'online')"
+    } catch {
+        Vapor-Warn "LM Studio Server    -> $(msg 'standby')"
+    }
+} else {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+        Vapor-Success "Ollama Server       -> $(msg 'online')"
+    } catch {
+        Vapor-Warn "Ollama Server       -> $(msg 'standby')"
+    }
 }
 
 # vibe-coder.py syntax check
@@ -898,24 +956,32 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
 }
 
 # Model check
-try {
-    $resp = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-    $tags = $resp.Content | ConvertFrom-Json
-    $found = $tags.models | Where-Object { $_.name -eq $SelectedModel }
-    if ($found) {
-        Vapor-Success "AI Model ($SelectedModel) -> $(msg 'loaded')"
-    } else {
-        Vapor-Warn "AI Model ($SelectedModel) -> $(msg 'not_loaded')"
-    }
+if ($LLMEngine -eq "lmstudio") {
+    # LM Studioの場合はモデルのチェックは行わない（GUIで管理）
+    Vapor-Info "AI Model ($SelectedModel) -> Please download in LM Studio GUI"
     if ($SidecarModel -and $SidecarModel -ne $SelectedModel) {
-        $foundSc = $tags.models | Where-Object { $_.name -eq $SidecarModel }
-        if ($foundSc) {
-            Vapor-Success "Sidecar  ($SidecarModel) -> $(msg 'loaded')"
-        } else {
-            Vapor-Warn "Sidecar  ($SidecarModel) -> $(msg 'not_loaded')"
-        }
+        Vapor-Info "Sidecar  ($SidecarModel) -> Please download in LM Studio GUI"
     }
-} catch {}
+} else {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+        $tags = $resp.Content | ConvertFrom-Json
+        $found = $tags.models | Where-Object { $_.name -eq $SelectedModel }
+        if ($found) {
+            Vapor-Success "AI Model ($SelectedModel) -> $(msg 'loaded')"
+        } else {
+            Vapor-Warn "AI Model ($SelectedModel) -> $(msg 'not_loaded')"
+        }
+        if ($SidecarModel -and $SidecarModel -ne $SelectedModel) {
+            $foundSc = $tags.models | Where-Object { $_.name -eq $SidecarModel }
+            if ($foundSc) {
+                Vapor-Success "Sidecar  ($SidecarModel) -> $(msg 'loaded')"
+            } else {
+                Vapor-Warn "Sidecar  ($SidecarModel) -> $(msg 'not_loaded')"
+            }
+        }
+    } catch {}
+}
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  🎆  Ｃ Ｏ Ｍ Ｐ Ｌ Ｅ Ｔ Ｅ !!                           ║

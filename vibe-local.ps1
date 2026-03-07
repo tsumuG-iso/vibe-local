@@ -139,7 +139,7 @@ function Invoke-VibeLocalUninstall {
     } else {
         Write-Host "No installed files were found."
     }
-    Write-Host "Note: LM Studio / Ollama are not removed."
+    Write-Host "Note: LM Studio is not removed."
 }
 
 # Parse config file (safe grep-style, no dot-sourcing)
@@ -152,6 +152,13 @@ if (Test-Path $ConfigFile) {
         if ($line -match '^\s*LLM_ENGINE\s*=\s*"?([^"]*)"?\s*$') { $LLMEngine = $Matches[1].Trim() }
         if ($line -match '^\s*OLLAMA_HOST\s*=\s*"?([^"]*)"?\s*$') { $OllamaHost = $Matches[1].Trim() }
         if ($line -match '^\s*LMSTUDIO_HOST\s*=\s*"?([^"]*)"?\s*$') { $LMStudioHost = $Matches[1].Trim() }
+        if ($line -match '^\s*LLM_HOST\s*=\s*"?([^"]*)"?\s*$') {
+            if ($LLMEngine -eq "lmstudio") {
+                $LMStudioHost = $Matches[1].Trim()
+            } else {
+                $OllamaHost = $Matches[1].Trim()
+            }
+        }
         if ($line -match '^\s*VIBE_LOCAL_DEBUG\s*=\s*"?([01])"?\s*$') { $VibeLocalDebug = [int]$Matches[1] }
     }
 }
@@ -318,12 +325,21 @@ try {
     } else {
         Write-Host " Model: (auto-detect)"
     }
-    Write-Host " Engine: LM Studio ($LMStudioHost)"
+    if ($LLMEngine -eq "lmstudio") {
+        Write-Host " Engine: LM Studio ($LMStudioHost)"
+    } else {
+        Write-Host " Engine: Ollama ($OllamaHost)"
+    }
     Write-Host "============================================"
     Write-Host ""
     $env:VIBE_LOCAL_MODEL = $CfgModel
     $env:VIBE_LOCAL_SIDECAR_MODEL = if ($SidecarModel) { $SidecarModel } else { "" }
     $env:VIBE_LOCAL_DEBUG = "$VibeLocalDebug"
+    if ($LLMEngine -eq "lmstudio") {
+        $env:LLM_HOST = $LMStudioHost
+    } else {
+        $env:OLLAMA_HOST = $OllamaHost
+    }
     $env:PYTHONIOENCODING = "utf-8"
     $env:PYTHONUTF8 = "1"
 
@@ -342,6 +358,7 @@ try {
 finally {
     # [SEC] Clean up environment variables set during this session
     Remove-Item Env:OLLAMA_HOST -ErrorAction SilentlyContinue
+    Remove-Item Env:LLM_HOST -ErrorAction SilentlyContinue
     Remove-Item Env:VIBE_LOCAL_MODEL -ErrorAction SilentlyContinue
     Remove-Item Env:VIBE_LOCAL_SIDECAR_MODEL -ErrorAction SilentlyContinue
     Remove-Item Env:VIBE_LOCAL_DEBUG -ErrorAction SilentlyContinue

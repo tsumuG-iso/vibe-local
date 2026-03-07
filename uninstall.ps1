@@ -64,4 +64,4 @@ if ($removed -gt 0) {
 } else {
     Write-Host "No installed files were found."
 }
-Write-Host "Note: LM Studio / Ollama are not removed."
+Write-Host "Note: LM Studio is not removed."
