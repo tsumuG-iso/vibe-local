@@ -816,7 +816,7 @@ if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "vibe-coder.py"))) {
     Copy-Item (Join-Path $ScriptDir "vibe-local.ps1") -Destination $BinDir -Force
     Copy-Item (Join-Path $ScriptDir "vibe-local.cmd") -Destination $BinDir -Force
 } else {
-    $RepoRaw = "https://raw.githubusercontent.com/ochyai/vibe-local/main"
+    $RepoRaw = "https://raw.githubusercontent.com/tsumuG-iso/vibe-local/lm-studio-support"
     Vapor-Info (msg 'source_github')
     try {
         Invoke-WebRequest -Uri "$RepoRaw/vibe-coder.py" -OutFile (Join-Path $LibDir "vibe-coder.py") -ErrorAction Stop
