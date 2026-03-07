@@ -1517,16 +1517,48 @@ class LLMClient:
                 return False
         else:
             models = available_models
-        # Exact match or match without :latest tag (strip for robustness)
         want = model_name.strip()
         for m in models:
-            ms = m.strip()
-            if ms == want or ms == f"{want}:latest" or want == ms.split(":")[0]:
-                return True
-            # Also check if want starts with model base name (e.g. "qwen3:8b" matches "qwen3:8b-q4_0")
-            if ms.startswith(f"{want}:") or ms.startswith(f"{want}-"):
+            if self._model_name_matches(want, m):
                 return True
         return False
+
+    @staticmethod
+    def _normalize_model_name(name):
+        """Normalize model names across LM Studio/Ollama naming styles.
+
+        Examples:
+          - "qwen3.5-9b" -> "qwen359b"
+          - "lmstudio-community/Qwen3.5-9B-Instruct-GGUF" -> "lmstudiocommunityqwen359binstructgguf"
+        """
+        s = (name or "").strip().lower()
+        return re.sub(r"[^a-z0-9]", "", s)
+
+    def _model_name_matches(self, want, actual):
+        """Flexible model name matching for different provider naming formats."""
+        w = (want or "").strip()
+        a = (actual or "").strip()
+        if not w or not a:
+            return False
+
+        # Fast-path matches
+        if a == w or a == f"{w}:latest" or w == a.split(":")[0]:
+            return True
+        if a.startswith(f"{w}:") or a.startswith(f"{w}-"):
+            return True
+
+        # Handle provider prefixes (e.g. "lmstudio-community/foo/bar")
+        a_tail = a.split("/")[-1]
+        if a_tail == w or a_tail.startswith(f"{w}:") or a_tail.startswith(f"{w}-"):
+            return True
+
+        # Normalized contains match (case/symbol insensitive)
+        nw = self._normalize_model_name(w)
+        na = self._normalize_model_name(a)
+        na_tail = self._normalize_model_name(a_tail)
+        if not nw:
+            return False
+        return (nw in na) or (nw in na_tail)
 
     def try_lmstudio_autoload(self, model_name):
         """Try loading an unloaded LM Studio model via `lms` CLI.
@@ -7605,7 +7637,10 @@ def main():
     if not model_ok:
         print(f"\n{C.YELLOW}The AI model '{config.model}' is not loaded or model name does not match.{C.RESET}")
         if models:
-            print(f"{C.DIM}Available models: {', '.join(models[:5])}{C.RESET}")
+            preview = ", ".join(models[:10])
+            print(f"{C.DIM}Available models: {preview}{C.RESET}")
+            if len(models) > 10:
+                print(f"{C.DIM}... and {len(models) - 10} more{C.RESET}")
         else:
             print(f"{C.DIM}No models downloaded yet.{C.RESET}")
 
