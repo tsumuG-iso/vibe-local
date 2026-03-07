@@ -1528,6 +1528,55 @@ class LLMClient:
                 return True
         return False
 
+    def try_lmstudio_autoload(self, model_name):
+        """Try loading an unloaded LM Studio model via `lms` CLI.
+
+        Returns:
+            (loaded: bool, models: list[str], reason: str)
+            reason: "loaded" | "cli_missing" | "load_failed" | "not_lmstudio"
+        """
+        if self.llm_engine != "lmstudio":
+            return False, [], "not_lmstudio"
+
+        cli = shutil.which("lms")
+        if not cli:
+            return False, [], "cli_missing"
+
+        candidates = [
+            [cli, "load", model_name],
+            [cli, "model", "load", model_name],
+            [cli, "models", "load", model_name],
+        ]
+
+        for cmd in candidates:
+            try:
+                p = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            except Exception:
+                continue
+
+            # Even when command returns non-zero, model might already be loaded
+            ok, models = self.check_connection(retries=2)
+            if ok and self.check_model(model_name, available_models=models):
+                return True, models, "loaded"
+
+            if p.returncode == 0:
+                # Command succeeded; give LM Studio a moment to expose it in /v1/models
+                for _ in range(5):
+                    time.sleep(1)
+                    ok, models = self.check_connection(retries=1)
+                    if ok and self.check_model(model_name, available_models=models):
+                        return True, models, "loaded"
+
+        ok, models = self.check_connection(retries=1)
+        return False, (models if ok else []), "load_failed"
+
     def pull_model(self, model_name):
         """Pull a model from the LLM engine registry. Streams progress to stdout.
 
@@ -7544,21 +7593,39 @@ def main():
     model_ok = client.check_model(config.model, available_models=models)
 
     if not model_ok:
-        print(f"\n{C.YELLOW}The AI model '{config.model}' is not found.{C.RESET}")
+        auto_loaded = False
+        auto_reason = ""
+        if config.llm_engine == "lmstudio":
+            auto_loaded, models_after, auto_reason = client.try_lmstudio_autoload(config.model)
+            if auto_loaded:
+                models = models_after
+                model_ok = True
+                print(f"\n{C.GREEN}Model '{config.model}' was auto-loaded via LM Studio CLI.{C.RESET}")
+
+    if not model_ok:
+        print(f"\n{C.YELLOW}The AI model '{config.model}' is not loaded or model name does not match.{C.RESET}")
         if models:
             print(f"{C.DIM}Available models: {', '.join(models[:5])}{C.RESET}")
         else:
             print(f"{C.DIM}No models downloaded yet.{C.RESET}")
 
-        try:
-            ans = input(f"{C.CYAN}Download '{config.model}' in LM Studio? [Y/n]: {C.RESET}").strip().lower()
-            if ans in ("", "y", "yes"):
-                print(f"{C.DIM}Please open LM Studio and download the model manually.{C.RESET}")
-                print(f"{C.DIM}After downloading, run vibe-local again.{C.RESET}")
+        if config.llm_engine == "lmstudio":
+            if auto_reason == "cli_missing":
+                print(f"{C.DIM}LM Studio CLI (lms) not found. Please download/load it in LM Studio GUI.{C.RESET}")
+            elif auto_reason == "load_failed":
+                print(f"{C.DIM}Tried auto-load via lms, but model is still unavailable.{C.RESET}")
+                print(f"{C.DIM}Please load it in LM Studio GUI or check MODEL name in config.{C.RESET}")
             else:
-                print(f"{C.DIM}To use a different model, set MODEL in config file.{C.RESET}")
-        except (EOFError, KeyboardInterrupt):
-            print()
+                print(f"{C.DIM}Please load the model in LM Studio GUI or adjust MODEL name.{C.RESET}")
+        else:
+            try:
+                ans = input(f"{C.CYAN}Download '{config.model}' now? [Y/n]: {C.RESET}").strip().lower()
+                if ans in ("", "y", "yes"):
+                    client.pull_model(config.model)
+                else:
+                    print(f"{C.DIM}To use a different model, set MODEL in config file.{C.RESET}")
+            except (EOFError, KeyboardInterrupt):
+                print()
         sys.exit(1)
 
     # Setup components
