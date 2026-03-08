@@ -1948,10 +1948,14 @@ class LLMClient:
                 delta = choices[0].get("delta", {})
                 finish_reason = choices[0].get("finish_reason", None)
 
-                # Build chunk in OpenAI format
-                chunk = {"delta": delta}
-                if finish_reason:
-                    chunk["finish_reason"] = finish_reason
+                # Build OpenAI-compatible chunk (same shape as /api/chat adapter)
+                # stream_response() expects choices[0].delta.
+                chunk = {
+                    "choices": [{
+                        "delta": delta,
+                        "finish_reason": finish_reason,
+                    }]
+                }
 
                 yield chunk
         finally:
