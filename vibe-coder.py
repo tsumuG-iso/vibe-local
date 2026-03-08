@@ -5563,9 +5563,12 @@ class Session:
         index = Session._load_project_index(config)
         return index.get(cwd_key)
 
-    @staticmethod
-    def _estimate_tokens(text):
-        """Estimate tokens with better CJK support. CJK chars ≈ 1 token each."""
+    def _estimate_tokens(self, text):
+        """Estimate tokens with better CJK support and model-specific adjustments.
+
+        CJK chars ≈ 1 token each, non-CJK ≈ 4 chars per token.
+        Model-specific adjustments based on observed tokenization efficiency.
+        """
         if not text:
             return 0
         cjk_count = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff'
@@ -5576,7 +5579,25 @@ class Session:
                         or '\uff01' <= ch <= '\uff60'   # fullwidth forms
                         or '\uac00' <= ch <= '\ud7af')  # korean
         non_cjk = len(text) - cjk_count
-        return cjk_count + non_cjk // 4
+        base_estimate = cjk_count + non_cjk // 4
+
+        # Apply model-specific adjustment factors
+        model_name = self.config.model.lower() if hasattr(self.config, 'model') else ""
+
+        # Qwen models are more efficient (better compression)
+        if "qwen" in model_name:
+            return int(base_estimate * 0.85)
+        # LLaMA models are slightly less efficient
+        elif "llama" in model_name or "llama-3" in model_name:
+            return int(base_estimate * 1.1)
+        # DeepSeek models are moderately efficient
+        elif "deepseek" in model_name:
+            return int(base_estimate * 0.95)
+        # Mistral models are fairly efficient
+        elif "mistral" in model_name:
+            return int(base_estimate * 0.9)
+
+        return base_estimate
 
     def _enforce_max_messages(self):
         """Trim oldest messages if exceeding MAX_MESSAGES, preserving tool_call/result pairing."""
@@ -5719,10 +5740,11 @@ class Session:
         return self._token_estimate + self._estimate_tokens(self.system_prompt)
 
     def _summarize_old_messages(self, old_messages):
-        """Use sidecar model to generate a summary of old conversation messages.
-        Returns summary text or None if sidecar is unavailable/fails."""
-        if not self._client or not self.config.sidecar_model:
+        """Use sidecar model to generate a summary of old conversation messages with fallbacks.
+        Returns summary text or None if all summarization attempts fail."""
+        if not old_messages:
             return None
+
         # Build a condensed transcript for summarization
         transcript_parts = []
         for msg in old_messages:
@@ -5749,6 +5771,29 @@ class Session:
         transcript = "\n".join(transcript_parts)
         if len(transcript) > 4000:
             transcript = transcript[:4000] + "\n...(truncated)"
+
+        # Try sidecar model first
+        if self._client and self.config.sidecar_model:
+            summary = self._summarize_with_model(transcript, self.config.sidecar_model)
+            if summary and len(summary.strip()) > 10:
+                return summary.strip()
+
+        # Fallback 1: Try main model with limited context
+        if self._client and self.config.model:
+            # Use only recent messages (last 20) to avoid context overflow
+            recent_transcript = transcript[-2000:] if len(transcript) > 2000 else transcript
+            summary = self._summarize_with_model(recent_transcript, self.config.model)
+            if summary:
+                return summary.strip() + "\n(older conversation truncated)"
+
+        # Fallback 2: Simple heuristic summary
+        return self._fallback_simple_summary(old_messages)
+
+    def _summarize_with_model(self, transcript, model_name):
+        """Attempt summarization with a specific model."""
+        if not self._client:
+            return None
+
         summary_prompt = [
             {"role": "system", "content": "You are a concise summarizer. Respond ONLY with bullet points."},
             {"role": "user", "content": (
@@ -5759,7 +5804,7 @@ class Session:
         ]
         try:
             resp = self._client.chat(
-                model=self.config.sidecar_model,
+                model=model_name,
                 messages=summary_prompt,
                 tools=None,
                 stream=False,
@@ -5769,9 +5814,105 @@ class Session:
                 summary = choices[0].get("message", {}).get("content", "")
                 if summary and len(summary.strip()) > 10:
                     return summary.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            if self.config.debug:
+                print(f"{C.DIM}[debug] Summarization failed with {model_name}: {e}{C.RESET}", file=sys.stderr)
         return None
+
+    def _fallback_simple_summary(self, old_messages):
+        """Simple heuristic-based summary when models fail."""
+        if not old_messages:
+            return None
+
+        # Count statistics
+        task_count = sum(1 for m in old_messages if m.get("role") == "user")
+        tool_calls = sum(len(m.get("tool_calls", [])) for m in old_messages if m.get("tool_calls"))
+
+        return (
+            f"Earlier conversation contained {task_count} user requests and {tool_calls} tool calls. "
+            f"Detailed context was truncated due to size constraints."
+        )
+
+    def _smart_truncate_tool_result(self, content, max_tokens=200):
+        """Intelligently truncate tool results preserving important information like error messages.
+
+        Preserves:
+        - Error messages and tracebacks
+        - Important lines with keywords like 'failed', 'error', 'exception'
+        - First and last parts for context
+
+        Args:
+            content: The tool result content to truncate
+            max_tokens: Maximum tokens to preserve (approx 4 chars per token)
+
+        Returns:
+            Truncated content string
+        """
+        if not content:
+            return content
+
+        # First, try to fit within limit without truncation
+        if self._estimate_tokens(content) <= max_tokens:
+            return content
+
+        # Split into lines for intelligent processing
+        lines = content.split('\n')
+
+        # Identify important lines (errors, failures, exceptions, tracebacks)
+        important_indices = set()
+        error_keywords = ['error', 'failed', 'exception', 'traceback', 'warning',
+                       'fatal', 'critical', 'abort', 'cannot', 'unable']
+
+        for i, line in enumerate(lines):
+            line_lower = line.lower()
+            if any(keyword in line_lower for keyword in error_keywords):
+                # Keep the error line and surrounding context (2 lines before, 3 lines after)
+                start = max(0, i - 2)
+                end = min(len(lines), i + 4)
+                for j in range(start, end):
+                    important_indices.add(j)
+
+        # Build result preserving important lines and limiting total size
+        result_lines = []
+        current_tokens = 0
+        max_chars = max_tokens * 4  # Approximate character limit
+
+        for i, line in enumerate(lines):
+            # Always include important lines
+            is_important = i in important_indices
+
+            # Check if adding this line would exceed limit
+            line_len = len(line) + 1  # +1 for newline
+            if current_tokens + line_len > max_chars and not is_important:
+                # For non-important lines, truncate if we have enough content
+                if len(result_lines) > 5:  # Keep at least some context
+                    remaining = len(lines) - i
+                    result_lines.append(f"... ({remaining} more lines)")
+                    break
+                continue
+
+            result_lines.append(line)
+            current_tokens += line_len
+
+        # If we still exceed limit, do a final mechanical truncation
+        result = '\n'.join(result_lines)
+        if self._estimate_tokens(result) > max_tokens:
+            # Keep important sections and trim from middle
+            important_lines = [lines[i] for i in sorted(important_indices) if i < len(lines)]
+            if important_lines:
+                # Keep beginning, important lines, and end
+                keep_start = '\n'.join(lines[:10])  # First 10 lines
+                keep_important = '\n'.join(important_lines)
+                keep_end = '\n'.join(lines[-10:]) if len(lines) > 10 else ''
+
+                result = f"{keep_start}\n\n[IMPORTANT]\n{keep_important}\n\n{keep_end}"
+            else:
+                # Fallback to simple truncation
+                keep_chars = int(max_chars * 0.8)  # Keep 80% of limit
+                if len(result) > keep_chars * 2:
+                    result = result[:keep_chars] + "\n...(truncated)...\n" + result[-(keep_chars//2):]
+
+        return result
 
     def compact_if_needed(self, force=False):
         """Trim old messages if context is getting too large.
@@ -5841,13 +5982,16 @@ class Session:
 
         self._recalculate_tokens()
 
-        # After compaction, if still over budget, truncate recent tool results
+        # After compaction, if still over budget, truncate recent tool results intelligently
         if self._token_estimate > max_tokens:
             for i, msg in enumerate(self.messages):
                 if msg.get("role") == "tool":
                     content = msg.get("content", "")
-                    if len(content) > 500:
-                        self.messages[i] = {**msg, "content": content[:200] + "\n...(truncated)...\n" + content[-200:]}
+                    if self._estimate_tokens(content) > 500:
+                        self.messages[i] = {
+                            **msg,
+                            "content": self._smart_truncate_tool_result(content, 200)
+                        }
             self._recalculate_tokens()
 
         self._just_compacted = True
@@ -6277,7 +6421,7 @@ class TUI:
             pass
 
     def stream_response(self, response_iter, known_tools=None):
-        """Stream LLM response to terminal. Returns (text, tool_calls).
+        """Stream LLM response to terminal. Returns (text, tool_calls, finish_reason).
 
         Handles both text content and tool_call deltas from streaming responses.
         Tool calls are accumulated from delta chunks (OpenAI-compatible format).
@@ -6290,6 +6434,10 @@ class TUI:
         header_printed = False
         # Accumulate tool_call deltas: {index: {"id": ..., "name": ..., "arguments": ...}}
         _tc_accum = {}
+        # Track finish_reason from final chunk
+        _finish_reason = None
+        # Track usage from final chunk
+        _usage = None
 
         # Status line tracking for streaming progress
         _stream_start = time.time()
@@ -6326,6 +6474,13 @@ class TUI:
         for chunk in response_iter:
             choice = chunk.get("choices", [{}])[0]
             delta = choice.get("delta", {})
+            # Track finish_reason from final chunk
+            finish_reason = choice.get("finish_reason")
+            if finish_reason:
+                _finish_reason = finish_reason
+            # Track usage from final chunk
+            if "usage" in chunk:
+                _usage = chunk["usage"]
 
             # Accumulate tool call deltas (streamed tool calling)
             for tc_delta in delta.get("tool_calls", []):
@@ -6344,7 +6499,8 @@ class TUI:
                     acc["function"]["arguments"] += _fa if isinstance(_fa, str) else str(_fa)
 
             content = delta.get("content", "")
-            if not content:
+            # Don't skip if we have tool calls or finish_reason even without content
+            if not content and not delta.get("tool_calls") and not finish_reason:
                 _update_thinking_status()
                 continue
             # Approximate token count: ~4 chars per token
@@ -6436,14 +6592,16 @@ class TUI:
                 streamed_tool_calls = extracted
                 full_text = cleaned
 
-        return full_text, streamed_tool_calls
+        return full_text, streamed_tool_calls, _finish_reason, _usage
 
     def show_sync_response(self, data, known_tools=None):
-        """Display a sync (non-streaming) response. Returns (text, tool_calls)."""
+        """Display a sync (non-streaming) response. Returns (text, tool_calls, finish_reason, usage)."""
         choice = data.get("choices", [{}])[0]
         message = choice.get("message", {})
         content = message.get("content", "") or ""
         tool_calls = message.get("tool_calls", [])
+        finish_reason = choice.get("finish_reason")
+        usage = data.get("usage", {})
 
         # Strip <think>...</think> blocks (Qwen reasoning traces)
         content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
@@ -6461,7 +6619,7 @@ class TUI:
             self._render_markdown(content)
             self._scroll_print()
 
-        return content, tool_calls
+        return content, tool_calls, finish_reason, usage
 
     def _render_markdown(self, text):
         """Simple markdown-ish rendering for terminal."""
@@ -7112,13 +7270,13 @@ class Agent:
                 # 2. Parse response
                 if isinstance(response, dict):
                     # Sync response (tool use mode)
-                    text, tool_calls = self.tui.show_sync_response(
+                    text, tool_calls, finish_reason, usage = self.tui.show_sync_response(
                         response, known_tools=self.registry.names()
                     )
                 else:
                     # Streaming response — ensure generator is closed on exit
                     try:
-                        text, tool_calls = self.tui.stream_response(
+                        text, tool_calls, finish_reason, usage = self.tui.stream_response(
                             response, known_tools=self.registry.names()
                         )
                     finally:
@@ -7127,15 +7285,25 @@ class Agent:
 
                 # Reconcile token estimate with actual usage from API
                 # Skip reconciliation right after compaction to avoid drift
-                if isinstance(response, dict) and not self.session._just_compacted:
-                    usage = response.get("usage", {})
-                    if usage.get("prompt_tokens", 0) > 0:
-                        self.session._token_estimate = (
-                            usage["prompt_tokens"] + usage.get("completion_tokens", 0)
-                        )
-                    # Show per-turn token usage (subtle, always visible)
+                if usage and not self.session._just_compacted:
                     prompt_t = usage.get("prompt_tokens", 0)
                     completion_t = usage.get("completion_tokens", 0)
+                    if prompt_t > 0:
+                        actual_tokens = prompt_t + completion_t
+                        estimated = self.session._token_estimate
+
+                        # Apply gradual correction if estimate differs significantly from actual
+                        if estimated > 0 and abs(actual_tokens - estimated) / estimated > 0.3:  # 30%+ deviation
+                            correction_factor = actual_tokens / estimated
+                            # Gradual correction: 90% estimate + 10% actual
+                            self.session._token_estimate = int(estimated * 0.9 + actual_tokens * 0.1)
+                            if self.config.debug:
+                                print(f"{C.DIM}[debug] Token estimate corrected: {estimated} → {self.session._token_estimate} (factor: {correction_factor:.2f}){C.RESET}", file=sys.stderr)
+                        else:
+                            # Direct update for small deviations
+                            self.session._token_estimate = actual_tokens
+
+                    # Show per-turn token usage (subtle, always visible)
                     if prompt_t or completion_t:
                         pct = min(int(((prompt_t + completion_t) / self.config.context_window) * 100), 100)
                         _p(f"  {_ansi(chr(27)+'[38;5;240m')}tokens: {prompt_t}→{completion_t} "
@@ -7145,12 +7313,46 @@ class Agent:
                 # Handle empty response from local LLM (retry with backoff, max 3)
                 if not text and not tool_calls and iteration < self.MAX_ITERATIONS - 1:
                     _empty_retries += 1
-                    if _empty_retries > 3:
-                        _p(f"\n{C.YELLOW}The AI returned empty responses (the model may be overloaded or incompatible).{C.RESET}")
-                        _p(f"{C.DIM}Try rephrasing, or switch models with: /model <name>{C.RESET}")
+
+                    # Collect diagnostic information
+                    debug_info = {
+                        "retry": _empty_retries,
+                        "response_type": "dict" if isinstance(response, dict) else "stream",
+                        "has_content": bool(text),
+                        "has_tools": bool(tool_calls),
+                        "token_estimate": self.session.get_token_estimate(),
+                        "context_usage": self.session.get_token_estimate() / self.config.context_window,
+                        "finish_reason": finish_reason,
+                    }
+
+                    # Check finish_reason for specific handling
+                    if finish_reason == "length":
+                        # Context overflow - trigger compaction and retry
+                        _p(f"\n{C.YELLOW}Response stopped due to context limit.{C.RESET}")
+                        _p(f"{C.DIM}Running /compact to clear context...{C.RESET}")
+                        self.session.compact_if_needed(force=True)
+                        time.sleep(_empty_retries * 0.5)
+                        continue
+                    elif finish_reason == "content_filter":
+                        # Content policy filtering
+                        _p(f"\n{C.YELLOW}Response filtered by content policy.{C.RESET}")
+                        _p(f"{C.DIM}Try rephrasing your request.{C.RESET}")
                         break
+                    elif finish_reason == "stop":
+                        # Normal stop but empty response - may need intervention
+                        if self.config.debug:
+                            print(f"{C.DIM}[debug] Empty response with finish_reason='stop': {debug_info}{C.RESET}", file=sys.stderr)
+                    elif _empty_retries > 3:
+                        # Max retries reached
+                        _p(f"\n{C.YELLOW}Empty response diagnostic:{C.RESET}")
+                        for key, value in debug_info.items():
+                            _p(f"  {key}: {value}")
+                        _p(f"{C.DIM}Possible causes: model overload, context overflow, tool format mismatch{C.RESET}")
+                        _p(f"{C.DIM}Try: /model to switch, /compact to clear context, or rephrase{C.RESET}")
+                        break
+
                     if self.config.debug:
-                        print(f"{C.DIM}[debug] Empty response (retry {_empty_retries}/3), backing off...{C.RESET}", file=sys.stderr)
+                        print(f"{C.DIM}[debug] Empty response #{_empty_retries}: {debug_info}{C.RESET}", file=sys.stderr)
                     time.sleep(_empty_retries * 0.5)  # exponential-ish backoff
                     continue
 
