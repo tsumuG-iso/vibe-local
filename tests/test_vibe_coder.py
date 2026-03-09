@@ -2946,6 +2946,25 @@ class TestOllamaClientChatErrors:
             with pytest.raises(RuntimeError, match="500"):
                 client.chat("model", [{"role": "user", "content": "hi"}], stream=False)
 
+    def test_chat_503_model_loading_is_tagged(self):
+        client = self._make_client()
+        import urllib.error
+        error = urllib.error.HTTPError(
+            url="http://localhost:11434/api/chat",
+            code=503, msg="Service Unavailable", hdrs=None,
+            fp=mock.MagicMock(read=mock.MagicMock(return_value=b"model is loading, please wait")),
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with pytest.raises(RuntimeError, match=r"\[MODEL_LOADING\]"):
+                client.chat("model", [{"role": "user", "content": "hi"}], stream=False)
+
+    def test_chat_urlerror_is_tagged_server_unreachable(self):
+        client = self._make_client()
+        import urllib.error
+        with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Connection refused")):
+            with pytest.raises(RuntimeError, match=r"\[SERVER_UNREACHABLE\]"):
+                client.chat("model", [{"role": "user", "content": "hi"}], stream=False)
+
     def test_chat_invalid_json_response(self):
         client = self._make_client()
         mock_resp = mock.MagicMock()
@@ -7012,6 +7031,45 @@ class TestSignalHandling:
         assert not agent._interrupted.is_set()
         agent.interrupt()
         assert agent._interrupted.is_set()
+
+
+class TestLmStudioWaitNotice:
+    """LM Studio wait/model-loading notice behavior."""
+
+    def test_agent_detects_lmstudio_backend(self):
+        cfg = vc.Config()
+        cfg.ollama_host = "http://localhost:1234"
+        client = mock.MagicMock()
+        registry = mock.MagicMock()
+        perms = mock.MagicMock()
+        session = mock.MagicMock()
+        tui = mock.MagicMock()
+        agent = vc.Agent(cfg, client, registry, perms, session, tui)
+        assert agent._is_lm_studio_backend() is True
+
+    def test_agent_detects_non_lmstudio_backend(self):
+        cfg = vc.Config()
+        cfg.ollama_host = "http://localhost:11434"
+        client = mock.MagicMock()
+        registry = mock.MagicMock()
+        perms = mock.MagicMock()
+        session = mock.MagicMock()
+        tui = mock.MagicMock()
+        agent = vc.Agent(cfg, client, registry, perms, session, tui)
+        assert agent._is_lm_studio_backend() is False
+
+    def test_source_has_8s_delayed_wait_notice(self):
+        with open(os.path.join(VIBE_LOCAL_DIR, "vibe-coder.py"), encoding="utf-8") as f:
+            content = f.read()
+        assert "wait(8.0)" in content
+        assert "wait_notice_shown" in content
+        assert "LM Studio サーバー応答待ち" in content
+
+    def test_source_suppresses_duplicate_runtime_hints(self):
+        with open(os.path.join(VIBE_LOCAL_DIR, "vibe-coder.py"), encoding="utf-8") as f:
+            content = f.read()
+        assert "model_loading_notice_shown" in content
+        assert "server_unreachable_notice_shown" in content
 
 
 class TestParallelExecution:

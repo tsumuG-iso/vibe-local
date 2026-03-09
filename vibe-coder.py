@@ -1420,6 +1420,9 @@ IMPORTANT — This is Windows (NOT Linux/macOS):
 class LLMClient:
     """Communicates with LLM engine (Ollama/LM Studio) via OpenAI-compatible API."""
 
+    ERR_TAG_MODEL_LOADING = "[MODEL_LOADING]"
+    ERR_TAG_SERVER_UNREACHABLE = "[SERVER_UNREACHABLE]"
+
     def __init__(self, config):
         self.llm_engine = getattr(config, 'llm_engine', 'ollama')
         self.base_url = config.ollama_host
@@ -1745,6 +1748,22 @@ class LLMClient:
             },
         }
 
+    @staticmethod
+    def _is_model_loading_error(status_code, error_body):
+        """Return True when HTTP error likely means model is loading/not ready."""
+        if status_code not in (400, 404, 503):
+            return False
+        body = (error_body or "").lower()
+        loading_terms = (
+            "model is loading", "loading model", "model loading", "not loaded",
+            "no model loaded", "please load", "initializing", "warming up",
+            "still loading",
+        )
+        if any(term in body for term in loading_terms):
+            return True
+        # Fallback: 503 responses that mention model/load are usually warmup/load waits.
+        return status_code == 503 and ("model" in body or "load" in body)
+
     def chat(self, model, messages, tools=None, stream=True):
         """Send chat request via LLM engine API.
 
@@ -1803,6 +1822,12 @@ class LLMClient:
                 pass
             finally:
                 e.close()
+            if self._is_model_loading_error(e.code, error_body):
+                raise RuntimeError(
+                    f"{self.ERR_TAG_MODEL_LOADING} "
+                    f"Model '{model}' is loading. Please wait and retry. "
+                    f"Error: {error_body[:200]}"
+                ) from e
             if e.code == 404:
                 if self.llm_engine == "lmstudio":
                     raise RuntimeError(f"Model '{model}' not found. Please download it in LM Studio GUI.") from e
@@ -1823,6 +1848,11 @@ class LLMClient:
                     raise RuntimeError(f"Bad request to LLM engine (400): {error_body}") from e
             else:
                 raise RuntimeError(f"LLM engine HTTP error {e.code}: {error_body}") from e
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", e)
+            raise RuntimeError(
+                f"{self.ERR_TAG_SERVER_UNREACHABLE} Could not reach backend server: {reason}"
+            ) from e
 
         if stream:
             return self._iter_ndjson(resp)
@@ -7157,6 +7187,31 @@ class Agent:
                 return tasks
         return []
 
+    def _is_lm_studio_backend(self):
+        host = (self.config.ollama_host or "").lower()
+        engine = (getattr(self.config, "llm_engine", "") or "").lower()
+        return engine == "lmstudio" or ("lmstudio" in host) or (":1234" in host)
+
+    def _show_backend_wait_notice(self, _p):
+        if self._is_lm_studio_backend():
+            _p(f"\n{C.DIM}LM Studio サーバー応答待ち...{C.RESET}")
+        else:
+            _p(f"\n{C.DIM}Ollama サーバー応答待ち...{C.RESET}")
+        _p(f"{C.DIM}初回はモデルロードに時間がかかることがあります...{C.RESET}")
+
+    def _show_model_loading_notice(self, _p):
+        if self._is_lm_studio_backend():
+            _p(f"{C.DIM}LM Studio でモデルをロード中の可能性があります。完了後に続行されます。{C.RESET}")
+        else:
+            _p(f"{C.DIM}モデルをロード中の可能性があります。しばらく待って再試行します。{C.RESET}")
+
+    def _show_server_unreachable_notice(self, _p):
+        if self._is_lm_studio_backend():
+            _p(f"{C.DIM}LM Studio のローカルサーバーが未起動か到達不可です。{C.RESET}")
+            _p(f"{C.DIM}LM Studio 側で OpenAI 互換サーバーを起動してください。{C.RESET}")
+        else:
+            _p(f"{C.DIM}Ollama サーバーに接続できません。起動後に再試行してください。{C.RESET}")
+
     def run(self, user_input):
         """Run the agent loop for a single user request."""
         _p = self.tui._scroll_print  # scroll-region-safe print
@@ -7242,7 +7297,21 @@ class Agent:
 
                 response = None
                 last_error = None
+                wait_notice_shown = False
+                model_loading_notice_shown = False
+                server_unreachable_notice_shown = False
                 for retry in range(self.MAX_RETRIES + 1):
+                    _wait_stop = threading.Event()
+                    _wait_thread = None
+                    if not wait_notice_shown:
+                        def _delayed_wait_notice(wait_event=_wait_stop):
+                            nonlocal wait_notice_shown
+                            if wait_event.wait(8.0):
+                                return
+                            self._show_backend_wait_notice(_p)
+                            wait_notice_shown = True
+                        _wait_thread = threading.Thread(target=_delayed_wait_notice, daemon=True)
+                        _wait_thread.start()
                     try:
                         response = self.client.chat(
                             model=self.config.model,
@@ -7253,18 +7322,38 @@ class Agent:
                         break
                     except (RuntimeError, urllib.error.URLError) as e:
                         last_error = e
+                        msg = str(e)
+                        if (OllamaClient.ERR_TAG_MODEL_LOADING in msg) and not model_loading_notice_shown:
+                            if not wait_notice_shown:
+                                self._show_backend_wait_notice(_p)
+                                wait_notice_shown = True
+                            self._show_model_loading_notice(_p)
+                            model_loading_notice_shown = True
+                        if (OllamaClient.ERR_TAG_SERVER_UNREACHABLE in msg) and not server_unreachable_notice_shown:
+                            if not wait_notice_shown:
+                                self._show_backend_wait_notice(_p)
+                                wait_notice_shown = True
+                            self._show_server_unreachable_notice(_p)
+                            server_unreachable_notice_shown = True
                         if retry < self.MAX_RETRIES:
                             if self.config.debug:
                                 print(f"{C.DIM}[debug] Retry {retry+1}/{self.MAX_RETRIES}: {e}{C.RESET}", file=sys.stderr)
                             time.sleep(1 + retry)  # increasing backoff
                             continue
                         raise
+                    finally:
+                        _wait_stop.set()
+                        if _wait_thread:
+                            _wait_thread.join(timeout=0.2)
 
                 self.tui.stop_spinner()
 
                 if response is None:
                     _p(f"\n{C.RED}The AI didn't respond. It may still be loading or ran out of memory.{C.RESET}")
-                    _p(f"{C.DIM}Try again, or restart LLM engine if this keeps happening.{C.RESET}")
+                    if self._is_lm_studio_backend():
+                        _p(f"{C.DIM}LM Studio サーバー状態とモデルロード状態を確認して再試行してください。{C.RESET}")
+                    else:
+                        _p(f"{C.DIM}Try again, or restart LLM engine if this keeps happening.{C.RESET}")
                     break
 
                 # 2. Parse response
@@ -7635,9 +7724,9 @@ class Agent:
                     response.close()
                 if text:
                     self.session.add_assistant_message(text)
-                if self.config.llm_engine == "lmstudio":
-                    _p(f"\n{C.RED}Lost connection to LM Studio (the local AI engine).{C.RESET}")
-                    _p(f"{C.DIM}It may have crashed or been closed. Restart LM Studio.{C.RESET}")
+                if self._is_lm_studio_backend():
+                    _p(f"\n{C.RED}Lost connection to LM Studio server.{C.RESET}")
+                    _p(f"{C.DIM}LM Studio 側のサーバー状態を確認して再接続してください。{C.RESET}")
                 else:
                     _p(f"\n{C.RED}Lost connection to Ollama (the local AI engine).{C.RESET}")
                     _p(f"{C.DIM}It may have crashed or been closed. Restart it:  ollama serve{C.RESET}")
