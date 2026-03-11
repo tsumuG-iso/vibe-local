@@ -8698,7 +8698,23 @@ def main():
                     continue
 
             # Run agent
-            agent.run(user_input)
+            try:
+                agent.run(user_input)
+            except (RuntimeError, ConnectionError, OSError, urllib.error.URLError) as e:
+                # Handle LLM engine errors gracefully
+                error_msg = str(e)
+                tui._scroll_print(f"\n{C.RED}Error: {error_msg[:200]}{C.RESET}")
+                if LLMClient.ERR_TAG_MODEL_LOADING in error_msg:
+                    tui._scroll_print(f"{C.DIM}Model is still loading. Please wait and retry.{C.RESET}")
+                elif LLMClient.ERR_TAG_SERVER_UNREACHABLE in error_msg:
+                    tui._scroll_print(f"{C.DIM}Cannot reach LLM engine. Please check if it's running.{C.RESET}")
+                else:
+                    tui._scroll_print(f"{C.DIM}Please try again or restart the LLM engine if this keeps happening.{C.RESET}")
+                # Remove the user message from session to prevent inconsistent state
+                if session.messages and session.messages[-1].get("role") == "user":
+                    removed = session.messages.pop()
+                    session._token_estimate -= session._estimate_tokens(removed.get("content", ""))
+                continue
             # Capture type-ahead for next prompt (text typed during execution)
             _typeahead_text = agent.get_typeahead()
             if _typeahead_text:
