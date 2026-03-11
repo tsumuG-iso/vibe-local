@@ -6501,86 +6501,96 @@ class TUI:
                     print(f"\r{' ' * _status_line_len}\r", end="", flush=True)
                 _status_line_shown = False
 
-        for chunk in response_iter:
-            choice = chunk.get("choices", [{}])[0]
-            delta = choice.get("delta", {})
-            # Track finish_reason from final chunk
-            finish_reason = choice.get("finish_reason")
-            if finish_reason:
-                _finish_reason = finish_reason
-            # Track usage from final chunk
-            if "usage" in chunk:
-                _usage = chunk["usage"]
+        try:
+            for chunk in response_iter:
+                choice = chunk.get("choices", [{}])[0]
+                delta = choice.get("delta", {})
+                # Track finish_reason from final chunk
+                finish_reason = choice.get("finish_reason")
+                if finish_reason:
+                    _finish_reason = finish_reason
+                # Track usage from final chunk
+                if "usage" in chunk:
+                    _usage = chunk["usage"]
 
-            # Accumulate tool call deltas (streamed tool calling)
-            for tc_delta in delta.get("tool_calls", []):
-                tc_idx = tc_delta.get("index", 0)
-                if tc_idx not in _tc_accum:
-                    _tc_accum[tc_idx] = {"id": "", "function": {"name": "", "arguments": ""}}
-                acc = _tc_accum[tc_idx]
-                if "id" in tc_delta and tc_delta["id"]:
-                    acc["id"] = tc_delta["id"]
-                func_delta = tc_delta.get("function", {})
-                if func_delta.get("name"):
-                    _fn = func_delta["name"]
-                    acc["function"]["name"] += _fn if isinstance(_fn, str) else str(_fn)
-                if func_delta.get("arguments"):
-                    _fa = func_delta["arguments"]
-                    acc["function"]["arguments"] += _fa if isinstance(_fa, str) else str(_fa)
+                # Accumulate tool call deltas (streamed tool calling)
+                for tc_delta in delta.get("tool_calls", []):
+                    tc_idx = tc_delta.get("index", 0)
+                    if tc_idx not in _tc_accum:
+                        _tc_accum[tc_idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+                    acc = _tc_accum[tc_idx]
+                    if "id" in tc_delta and tc_delta["id"]:
+                        acc["id"] = tc_delta["id"]
+                    func_delta = tc_delta.get("function", {})
+                    if func_delta.get("name"):
+                        _fn = func_delta["name"]
+                        acc["function"]["name"] += _fn if isinstance(_fn, str) else str(_fn)
+                    if func_delta.get("arguments"):
+                        _fa = func_delta["arguments"]
+                        acc["function"]["arguments"] += _fa if isinstance(_fa, str) else str(_fa)
 
-            content = delta.get("content", "")
-            # Don't skip if we have tool calls or finish_reason even without content
-            if not content and not delta.get("tool_calls") and not finish_reason:
+                content = delta.get("content", "")
+                # Don't skip if we have tool calls or finish_reason even without content
+                if not content and not delta.get("tool_calls") and not finish_reason:
+                    _update_thinking_status()
+                    continue
+                # Approximate token count: ~4 chars per token
+                _approx_tokens += len(content) // 4 or 1
+                raw_parts.append(content)
+                think_buf += content
+
                 _update_thinking_status()
-                continue
-            # Approximate token count: ~4 chars per token
-            _approx_tokens += len(content) // 4 or 1
-            raw_parts.append(content)
-            think_buf += content
 
-            _update_thinking_status()
-
-            # State machine: detect <think> and </think> tags even split across chunks
-            while True:
-                if not in_think:
-                    idx = think_buf.find("<think>")
-                    if idx == -1:
-                        # No think tag — print everything except trailing partial tag
-                        safe_end = len(think_buf)
-                        # Keep last 7 chars in buffer in case "<think>" is split
-                        if len(think_buf) > 7:
-                            to_print = think_buf[:safe_end - 7]
-                            think_buf = think_buf[safe_end - 7:]
+                # State machine: detect <think> and </think> tags even split across chunks
+                while True:
+                    if not in_think:
+                        idx = think_buf.find("<think>")
+                        if idx == -1:
+                            # No think tag — print everything except trailing partial tag
+                            safe_end = len(think_buf)
+                            # Keep last 7 chars in buffer in case "<think>" is split
+                            if len(think_buf) > 7:
+                                to_print = think_buf[:safe_end - 7]
+                                think_buf = think_buf[safe_end - 7:]
+                            else:
+                                to_print = ""
+                            if to_print:
+                                if not header_printed:
+                                    _clear_thinking_status()
+                                    self._scroll_print(f"\n{C.BBLUE}assistant{C.RESET}: ", end="", flush=True)
+                                    header_printed = True
+                                self._scroll_print(to_print, end="", flush=True)
+                            break
                         else:
-                            to_print = ""
-                        if to_print:
-                            if not header_printed:
-                                _clear_thinking_status()
-                                self._scroll_print(f"\n{C.BBLUE}assistant{C.RESET}: ", end="", flush=True)
-                                header_printed = True
-                            self._scroll_print(to_print, end="", flush=True)
-                        break
+                            # Print text before <think>
+                            to_print = think_buf[:idx]
+                            if to_print:
+                                if not header_printed:
+                                    _clear_thinking_status()
+                                    self._scroll_print(f"\n{C.BBLUE}assistant{C.RESET}: ", end="", flush=True)
+                                    header_printed = True
+                                self._scroll_print(to_print, end="", flush=True)
+                            think_buf = think_buf[idx + 7:]  # skip past <think>
+                            in_think = True
                     else:
-                        # Print text before <think>
-                        to_print = think_buf[:idx]
-                        if to_print:
-                            if not header_printed:
-                                _clear_thinking_status()
-                                self._scroll_print(f"\n{C.BBLUE}assistant{C.RESET}: ", end="", flush=True)
-                                header_printed = True
-                            self._scroll_print(to_print, end="", flush=True)
-                        think_buf = think_buf[idx + 7:]  # skip past <think>
-                        in_think = True
-                else:
-                    idx = think_buf.find("</think>")
-                    if idx == -1:
-                        # Still inside think block — discard but keep buffer for partial tag
-                        if len(think_buf) > 8:
-                            think_buf = think_buf[-8:]
-                        break
-                    else:
-                        think_buf = think_buf[idx + 8:]  # skip past </think>
-                        in_think = False
+                        idx = think_buf.find("</think>")
+                        if idx == -1:
+                            # Still inside think block — discard but keep buffer for partial tag
+                            if len(think_buf) > 8:
+                                think_buf = think_buf[-8:]
+                            break
+                        else:
+                            think_buf = think_buf[idx + 8:]  # skip past </think>
+                            in_think = False
+        except (ConnectionError, OSError, urllib.error.URLError) as e:
+            # Handle streaming errors gracefully
+            if self.debug:
+                print(f"\n{C.YELLOW}[debug] Stream response error: {e}{C.RESET}", file=sys.stderr)
+            # Set finish_reason to indicate stream error
+            if _finish_reason is None:
+                _finish_reason = "error"
+            # Don't re-raise - return what we have so far
+            pass
 
         # Clear status line before final output
         _clear_thinking_status()
