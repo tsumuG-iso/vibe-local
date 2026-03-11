@@ -7333,13 +7333,13 @@ class Agent:
                     except (RuntimeError, urllib.error.URLError) as e:
                         last_error = e
                         msg = str(e)
-                        if (OllamaClient.ERR_TAG_MODEL_LOADING in msg) and not model_loading_notice_shown:
+                        if (LLMClient.ERR_TAG_MODEL_LOADING in msg) and not model_loading_notice_shown:
                             if not wait_notice_shown:
                                 self._show_backend_wait_notice(_p)
                                 wait_notice_shown = True
                             self._show_model_loading_notice(_p)
                             model_loading_notice_shown = True
-                        if (OllamaClient.ERR_TAG_SERVER_UNREACHABLE in msg) and not server_unreachable_notice_shown:
+                        if (LLMClient.ERR_TAG_SERVER_UNREACHABLE in msg) and not server_unreachable_notice_shown:
                             if not wait_notice_shown:
                                 self._show_backend_wait_notice(_p)
                                 wait_notice_shown = True
