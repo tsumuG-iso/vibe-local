@@ -7928,7 +7928,7 @@ class Agent:
                     _p(f"{C.DIM}It may have crashed or been closed. Restart it:  ollama serve{C.RESET}")
                 _p(f"{C.DIM}Your conversation is still here — just try again after restarting.{C.RESET}")
                 break
-            except Exception as e:
+            except (RuntimeError, ConnectionError, OSError, urllib.error.URLError) as e:
                 self.tui.stop_spinner()
                 if response is not None and hasattr(response, 'close'):
                     response.close()
