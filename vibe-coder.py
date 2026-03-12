@@ -1433,6 +1433,16 @@ class LLMClient:
         self.timeout = 300
         self._supports_tool_streaming = None  # None=untested, True/False=detected
 
+    def reset_connection_state(self):
+        """Reset internal state after connection errors.
+
+        Called when persistent connection issues occur to ensure clean state.
+        """
+        # Reset detection flags to force re-detection
+        self._supports_tool_streaming = None
+        if self.debug:
+            print(f"{C.DIM}[debug] LLMClient connection state reset{C.RESET}", file=sys.stderr)
+
     def check_connection(self, retries=3):
         """Check if LLM engine is reachable. Returns (ok, model_list)."""
         # LM Studio uses OpenAI-compatible /v1/models endpoint
@@ -5537,6 +5547,31 @@ class Session:
         self._token_estimate = 0
         self._last_compact_msg_count = 0  # prevent infinite re-compaction
         self._just_compacted = False  # skip token reconciliation right after compaction
+        self._consecutive_errors = 0  # Track consecutive errors for reset decisions
+        self._max_consecutive_errors = 3  # Threshold for full session reset
+
+    def record_error(self):
+        """Record an error and check if session reset is needed.
+
+        Returns True if session should be fully reset."""
+        self._consecutive_errors += 1
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            return True
+        return False
+
+    def clear_errors(self):
+        """Reset error counter after successful request."""
+        self._consecutive_errors = 0
+
+    def force_full_reset(self):
+        """Force complete session reset to clear corrupted state."""
+        self.messages = []
+        self._token_estimate = 0
+        self._consecutive_errors = 0
+        self._last_compact_msg_count = 0
+        self._just_compacted = False
+        if self.config.debug:
+            print(f"{C.DIM}[debug] Session fully reset{C.RESET}", file=sys.stderr)
 
     def set_client(self, client):
         """Set LLMClient reference for sidecar model summarization."""
@@ -6156,6 +6191,157 @@ class Session:
                 })
         return sessions
 
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SleepPreventer — Prevent system sleep during long-running operations
+# ════════════════════════════════════════════════════════════════════════════════
+
+class SleepPreventer:
+    """Prevent system sleep during long-running operations.
+
+    Uses platform-specific APIs:
+    - Windows: SetThreadExecutionState() via ctypes
+    - macOS: caffeinate subprocess
+    - Linux: systemd-inhibit or xset
+    """
+
+    def __init__(self):
+        self._prevent_count = 0  # Reference count for nested prevention
+        self._prevent_process = None  # Subprocess for macOS/Linux
+        self._platform = platform.system()
+        self._enabled = False
+
+    def start_prevention(self):
+        """Start preventing system sleep.
+
+        Uses reference counting - call end_prevention() same number of times.
+        Returns True if prevention started successfully."""
+        if self._prevent_count == 0:
+            # First call - actually enable prevention
+            try:
+                if self._platform == "Windows":
+                    self._prevent_windows()
+                elif self._platform == "Darwin":
+                    self._prevent_macos()
+                elif self._platform == "Linux":
+                    self._prevent_linux()
+                else:
+                    return False
+
+                self._enabled = True
+                if __debug__:
+                    print(f"{C.DIM}[debug] Sleep prevention started{C.RESET}", file=sys.stderr)
+            except Exception as e:
+                if __debug__:
+                    print(f"{C.DIM}[debug] Sleep prevention failed: {e}{C.RESET}", file=sys.stderr)
+                return False
+
+        self._prevent_count += 1
+        return True
+
+    def end_prevention(self):
+        """End sleep prevention.
+
+        Must be called same number of times as start_prevention()."""
+        if self._prevent_count <= 0:
+            return
+
+        self._prevent_count -= 1
+
+        if self._prevent_count == 0:
+            # Last call - actually disable prevention
+            try:
+                if self._platform == "Windows":
+                    self._allow_windows()
+                elif self._prevent_process:
+                    self._allow_unix()
+
+                self._enabled = False
+                if __debug__:
+                    print(f"{C.DIM}[debug] Sleep prevention ended{C.RESET}", file=sys.stderr)
+            except Exception as e:
+                if __debug__:
+                    print(f"{C.DIM}[debug] Error ending sleep prevention: {e}{C.RESET}", file=sys.stderr)
+
+    def _prevent_windows(self):
+        """Prevent sleep on Windows using SetThreadExecutionState()."""
+        import ctypes
+        # ES_CONTINUOUS = 0x80000000
+        # ES_SYSTEM_REQUIRED = 0x00000001
+        # ES_DISPLAY_REQUIRED = 0x00000002
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ES_DISPLAY_REQUIRED = 0x00000002
+
+        kernel32 = ctypes.windll.kernel32
+        # Prevent system sleep and display sleep
+        flags = ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+        kernel32.SetThreadExecutionState(flags)
+
+    def _allow_windows(self):
+        """Allow normal sleep behavior on Windows."""
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+    def _prevent_macos(self):
+        """Prevent sleep on macOS using caffeinate."""
+        # caffeinate prevents sleep while process is running
+        self._prevent_process = subprocess.Popen(
+            ["caffeinate", "-d", "-w", str(os.getpid())],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    def _prevent_linux(self):
+        """Prevent sleep on Linux."""
+        # Try systemd-inhibit first (modern systems)
+        try:
+            self._prevent_process = subprocess.Popen(
+                ["systemd-inhibit", "--what=sleep", "--who=vibe-local",
+                 "--why=AI coding in progress", "sleep"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return
+        except FileNotFoundError:
+            pass
+
+        # Fallback: try xset to disable screen saver
+        try:
+            subprocess.Popen(
+                ["xset", "s", "off"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except (FileNotFoundError, OSError):
+            # No prevention available
+            pass
+
+    def _allow_unix(self):
+        """Allow sleep on macOS/Linux by terminating caffeinate/systemd-inhibit."""
+        if self._prevent_process:
+            try:
+                self._prevent_process.terminate()
+                self._prevent_process.wait(timeout=2)
+            except Exception:
+                try:
+                    self._prevent_process.kill()
+                except Exception:
+                    pass
+            finally:
+                self._prevent_process = None
+
+    def __enter__(self):
+        """Context manager support."""
+        self.start_prevention()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager support."""
+        self.end_prevention()
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -7763,6 +7949,8 @@ class Agent:
         # Stop ESC monitor (scroll region stays active — managed by main loop)
         self._last_typeahead = _esc_monitor.get_typeahead()
         _esc_monitor.stop()
+        # Clear error counter on successful run
+        self.session.clear_errors()
 
     def get_typeahead(self):
         """Return and clear any type-ahead text captured during last run()."""
@@ -8048,6 +8236,14 @@ def main():
 
     agent = Agent(config, client, registry, permissions, session, tui,
                   rag_engine=_rag_engine)
+
+    # Initialize sleep preventer
+    sleep_preventer = SleepPreventer()
+
+    # Register cleanup handler for sleep preventer
+    def cleanup():
+        sleep_preventer.end_prevention()
+    atexit.register(cleanup)
 
     # Handle Ctrl+C gracefully
     def signal_handler(sig, frame):
@@ -8709,21 +8905,34 @@ def main():
 
             # Run agent
             try:
-                agent.run(user_input)
+                # Start sleep prevention before long-running AI operations
+                sleep_preventer.start_prevention()
+                try:
+                    agent.run(user_input)
+                finally:
+                    # Always end prevention after operation
+                    sleep_preventer.end_prevention()
             except (RuntimeError, ConnectionError, OSError, urllib.error.URLError) as e:
                 # Handle LLM engine errors gracefully
                 error_msg = str(e)
                 tui._scroll_print(f"\n{C.RED}Error: {error_msg[:200]}{C.RESET}")
+                # Reset LLMClient state
+                client.reset_connection_state()
+                # Check if full session reset is needed
+                if session.record_error():
+                    tui._scroll_print(f"{C.YELLOW}Multiple errors detected. Resetting session...{C.RESET}")
+                    session.force_full_reset()
+                else:
+                    # Remove the user message from session to prevent inconsistent state
+                    if session.messages and session.messages[-1].get("role") == "user":
+                        removed = session.messages.pop()
+                        session._token_estimate -= session._estimate_tokens(removed.get("content", ""))
                 if LLMClient.ERR_TAG_MODEL_LOADING in error_msg:
                     tui._scroll_print(f"{C.DIM}Model is still loading. Please wait and retry.{C.RESET}")
                 elif LLMClient.ERR_TAG_SERVER_UNREACHABLE in error_msg:
                     tui._scroll_print(f"{C.DIM}Cannot reach LLM engine. Please check if it's running.{C.RESET}")
                 else:
                     tui._scroll_print(f"{C.DIM}Please try again or restart the LLM engine if this keeps happening.{C.RESET}")
-                # Remove the user message from session to prevent inconsistent state
-                if session.messages and session.messages[-1].get("role") == "user":
-                    removed = session.messages.pop()
-                    session._token_estimate -= session._estimate_tokens(removed.get("content", ""))
                 continue
             # Capture type-ahead for next prompt (text typed during execution)
             _typeahead_text = agent.get_typeahead()
